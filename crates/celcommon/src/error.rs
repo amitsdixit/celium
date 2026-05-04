@@ -32,6 +32,19 @@ pub enum CelError {
     #[error("i/o error: {0}")]
     Io(String),
 
+    /// A bounded operation exceeded its deadline. W17 introduced this
+    /// variant so RPC and gossip timeouts surface as `timeout` rather
+    /// than masquerading as generic I/O.
+    #[error("timeout: {0}")]
+    Timeout(String),
+
+    /// A persistent-storage subsystem reported failure (corruption,
+    /// integrity check mismatch, manifest out-of-sync, …). Distinct
+    /// from [`CelError::Io`] so operators can route storage incidents
+    /// independently from network ones.
+    #[error("storage: {0}")]
+    Storage(String),
+
     /// Catch-all for unexpected internal state. Should be unreachable in
     /// production; appearing in logs indicates a bug.
     #[error("internal: {0}")]
@@ -48,6 +61,8 @@ impl CelError {
             Self::Invalid(_)          => "invalid",
             Self::Hardware(_)         => "hardware",
             Self::Io(_)               => "io",
+            Self::Timeout(_)          => "timeout",
+            Self::Storage(_)          => "storage",
             Self::Internal(_)         => "internal",
         }
     }

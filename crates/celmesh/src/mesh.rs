@@ -25,6 +25,7 @@ use tokio::time::{interval, timeout};
 use crate::federation::{NamespaceFederation, RemoteVm, RestartPolicy};
 use crate::host::VmHost;
 use crate::membership::{Membership, NodeId, NodeInfo, NodeStatus};
+use crate::metrics::MeshMetrics;
 use crate::proto::{
     DecodeError, Envelope, Payload, VmOp, VmOpReply, VmOpResult, MAGIC, PROTO_VERSION,
 };
@@ -127,6 +128,10 @@ pub struct Mesh {
     pending:   Arc<Mutex<HashMap<u64, oneshot::Sender<VmOpResult>>>>,
     /// Monotonic counter for outbound request ids.
     next_req:  Arc<AtomicU64>,
+    /// W17: shared, lock-free counters covering gossip / RPC /
+    /// failure-detector activity. Cloned together with the rest of
+    /// the handle so every task sees the same values.
+    metrics:   MeshMetrics,
 }
 
 /// One row returned by the supervisor when it recreates a VM that
@@ -182,6 +187,7 @@ impl Mesh {
             host:    Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_req: Arc::new(AtomicU64::new(1)),
+            metrics: MeshMetrics::new(),
         };
 
         let recv_task = tokio::spawn(receiver_loop(mesh.clone()));
@@ -215,6 +221,43 @@ impl Mesh {
     /// Snapshot of every membership row.
     pub async fn members(&self) -> Vec<NodeInfo> {
         self.inner.lock().await.membership.snapshot()
+    }
+
+    /// Cluster-wide counter snapshot. W17 added this surface for
+    /// `/metrics` endpoints, alerting, and deterministic tests; it
+    /// is `O(1)` and lock-free on the read path.
+    #[must_use]
+    pub fn metrics(&self) -> crate::metrics::MeshMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    /// Render every counter in the Prometheus text-exposition
+    /// format. Useful for the future `/metrics` HTTP handler.
+    #[must_use]
+    pub fn metrics_prometheus(&self) -> String {
+        self.metrics.render_prometheus()
+    }
+
+    /// Add `addr` as a runtime seed and best-effort send a `Hello`
+    /// so the peer learns about us without waiting for a gossip
+    /// tick. W17 added this so an operator can heal a partitioned
+    /// cluster without bouncing nodes.
+    ///
+    /// # Errors
+    /// Returns the underlying transport error if the immediate
+    /// `Hello` cannot be encoded or shipped. The seed is recorded
+    /// either way, so the next gossip tick will retry.
+    pub async fn join(&self, addr: impl Into<String>) -> CelResult<()> {
+        let addr = addr.into();
+        {
+            let mut g = self.inner.lock().await;
+            g.known.insert(addr.clone());
+        }
+        self.metrics.inc_join_calls();
+        // The hello round-trip is best-effort; failures bubble up
+        // so the operator sees them, but the seed has already been
+        // recorded for retry on the next gossiper tick.
+        self.send_hello(&addr).await
     }
 
     /// Federated VM list — every node's view, with `owner_alive`
@@ -395,19 +438,26 @@ impl Mesh {
             self.pending.lock().await.remove(&req_id);
             return Err(e);
         }
+        self.metrics.inc_gossip_sent();
+        self.metrics.inc_rpc_out();
 
         match timeout(wait, rx).await {
             Ok(Ok(VmOpResult::Ok(r)))  => Ok(r),
-            Ok(Ok(VmOpResult::Err(s))) => Err(CelError::Io(format!("remote host: {s}"))),
+            Ok(Ok(VmOpResult::Err(s))) => {
+                self.metrics.inc_rpc_errors();
+                Err(CelError::Io(format!("remote host: {s}")))
+            }
             Ok(Err(_))                 => {
                 // Sender dropped — typically because the response
                 // arrived after we'd already taken the slot, which
                 // shouldn't happen, but is harmless.
+                self.metrics.inc_rpc_errors();
                 Err(CelError::Internal("response channel dropped"))
             }
             Err(_) => {
                 self.pending.lock().await.remove(&req_id);
-                Err(CelError::Io("rpc timed out".into()))
+                self.metrics.inc_rpc_timeouts();
+                Err(CelError::Timeout("mesh rpc".into()))
             }
         }
     }
@@ -513,6 +563,7 @@ impl Mesh {
         }
 
         if !out.is_empty() {
+            self.metrics.inc_supervisor_restarts(out.len() as u64);
             self.republish_after_op(&host, &self_id).await?;
         }
         Ok(out)
@@ -631,7 +682,9 @@ impl Mesh {
             }
         };
         let bytes = env.encode().map_err(|_| CelError::Internal("encode hello"))?;
-        self.transport.send(peer, &bytes).await
+        let r = self.transport.send(peer, &bytes).await;
+        if r.is_ok() { self.metrics.inc_gossip_sent(); }
+        r
     }
 
     async fn send_sync(&self, peer: &str) -> CelResult<()> {
@@ -656,7 +709,9 @@ impl Mesh {
             }
         };
         let bytes = env.encode().map_err(|_| CelError::Internal("encode sync"))?;
-        self.transport.send(peer, &bytes).await
+        let r = self.transport.send(peer, &bytes).await;
+        if r.is_ok() { self.metrics.inc_gossip_sent(); }
+        r
     }
 }
 
@@ -680,10 +735,12 @@ async fn receiver_loop(mesh: Mesh) {
             Ok(e) => e,
             Err(DecodeError::TooLarge | DecodeError::BadMagic
                 | DecodeError::Malformed | DecodeError::VersionMismatch) => {
+                mesh.metrics.inc_decode_errors();
                 tracing::trace!("celmesh: dropping unparseable frame from {src}");
                 continue;
             }
         };
+        mesh.metrics.inc_gossip_recv();
         handle_envelope(&mesh, env, &src).await;
     }
 }
@@ -695,6 +752,7 @@ async fn handle_envelope(mesh: &Mesh, env: Envelope, src: &str) {
     let payload = {
         let mut g = mesh.inner.lock().await;
         if env.cluster != g.config.cluster {
+            mesh.metrics.inc_foreign_cluster_drops();
             tracing::trace!("celmesh: dropping foreign-cluster frame from {src}");
             return;
         }
@@ -722,6 +780,7 @@ async fn handle_envelope(mesh: &Mesh, env: Envelope, src: &str) {
             if target != self_id.0 {
                 return;
             }
+            mesh.metrics.inc_rpc_in();
             let host = mesh.host.lock().await.clone();
             let result = match host {
                 None => VmOpResult::Err("no VmHost registered".into()),
@@ -756,7 +815,9 @@ async fn handle_envelope(mesh: &Mesh, env: Envelope, src: &str) {
                     }
                 };
                 if let Ok(bytes) = resp.encode() {
-                    let _ = mesh.transport.send(&addr, &bytes).await;
+                    if mesh.transport.send(&addr, &bytes).await.is_ok() {
+                        mesh.metrics.inc_gossip_sent();
+                    }
                 }
             }
         }
@@ -784,7 +845,9 @@ async fn gossiper_loop(mesh: Mesh) {
         // Pick a peer + advance the failure detector.
         let target: Option<String> = {
             let mut g = mesh.inner.lock().await;
-            g.membership.tick(Instant::now());
+            let delta = g.membership.tick(Instant::now());
+            mesh.metrics.inc_suspect_promotions(delta.suspect_promotions as u64);
+            mesh.metrics.inc_dead_promotions(delta.dead_promotions as u64);
             let candidates: Vec<String> = g
                 .membership
                 .snapshot()

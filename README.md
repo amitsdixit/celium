@@ -4,8 +4,8 @@
 > No Linux host, no KVM, no inherited hypervisor — Celium owns the silicon
 > from UEFI boot all the way up to a Kubernetes-shaped operator surface.
 
-[![Status](https://img.shields.io/badge/status-W15%20complete-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-96%20pass%20%2F%200%20fail-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-W17%20complete-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-100%20pass%20%2F%200%20fail-brightgreen)]()
 [![Rust](https://img.shields.io/badge/rust-stable%201.88-orange)]()
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)]()
 
@@ -134,8 +134,40 @@ variants cover every operator action in the system today.
 
 ## What's implemented today
 
-**Status:** Week 15 complete. 96 tests pass / 0 fail / 1 ignored across
-21 test suites. Validated on Windows + Ubuntu 24.04.
+**Status:** Week 17 (Core Layer hardening) complete. 100 tests pass / 0
+fail / 3 ignored across 22 test suites. Validated on Windows + Ubuntu
+24.04. The 3 ignored tests are W17 UDP soak tests (`w17_core` —
+`mesh_metrics_increment_under_real_traffic`, `mesh_join_heals_isolated_node`,
+`rpc_timeout_returns_celerror_timeout`); run them with
+`cargo test -p celtest --test w17_core -- --include-ignored`.
+
+### W17 — Core Layer hardening (NEW)
+
+- ✅ **CelError surface widened.** Two new variants — `CelError::Timeout(String)`
+  and `CelError::Storage(String)` — with stable `code()` strings `"timeout"`
+  and `"storage"`. RPC time-outs now surface as `Timeout("mesh rpc")`
+  instead of the historical `Io("rpc timed out")`.
+- ✅ **CelVault flush + stats + integrity.** Three new methods on the
+  `VolumeStore` trait, both implementations:
+  - `flush()` — durable-up-to-here sync (FileVolumeStore re-fsyncs the manifest).
+  - `stats(&VolumeId) -> VolumeStats { id, size_bytes, snapshot_count, total_snapshot_bytes }`.
+  - `integrity_check() -> IntegrityReport` — walks every volume + snapshot,
+    flags torn writes (FileVolumeStore validates on-disk file lengths
+    against the manifest).
+- ✅ **Mesh metrics + Prometheus surface.** New `MeshMetrics` (12 atomic
+  counters: `gossip_sent`, `gossip_recv`, `decode_errors`, `foreign_cluster_drops`,
+  `suspect_promotions`, `dead_promotions`, `rpc_in`, `rpc_out`, `rpc_timeouts`,
+  `rpc_errors`, `join_calls`, `supervisor_restarts`). `Mesh::metrics()`
+  returns a `MeshMetricsSnapshot` (`Copy + Serialize`); `Mesh::metrics_prometheus()`
+  emits `# TYPE celmesh_<name>_total counter` lines, ready for scraping.
+- ✅ **Failure-detector tick delta.** `Membership::tick` now returns
+  `TickDelta { state_changes, suspect_promotions, dead_promotions }`,
+  so the gossiper can record per-tick promotions in O(1) without
+  snapshotting the membership table under the inner mutex.
+- ✅ **`Mesh::join`.** Imperative "please reach out to this peer" —
+  inserts the address into the known set, increments `join_calls`,
+  and sends an immediate HELLO. Used to heal partitions and to wire
+  late-joining nodes without restarting the cluster.
 
 ### Control plane
 

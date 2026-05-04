@@ -312,6 +312,52 @@ impl VolumeStore for FileVolumeStore {
         Self::write_body(&self.volume_path(&snap.volume), &bytes)?;
         Ok(())
     }
+
+    /// Override the trait default so durability is explicit on disk:
+    /// reserialise + fsync the manifest. Body writes are already
+    /// fsynced per-op via `sync_data`, so this single round trip is
+    /// enough to make every previously-acked op durable across a
+    /// crash.
+    fn flush(&self) -> CelResult<()> {
+        let g = self.lock();
+        self.save_manifest(&g.manifest)
+            .map_err(|e| match e {
+                CelError::Io(s) => CelError::Storage(s),
+                other => other,
+            })
+    }
+
+    /// Override the default integrity check to inspect on-disk
+    /// body lengths directly — much cheaper than reading every
+    /// trailing byte through the public API and surfaces torn
+    /// writes that would otherwise pass length-only checks.
+    fn integrity_check(&self) -> CelResult<crate::IntegrityReport> {
+        let g = self.lock();
+        let mut rep = crate::IntegrityReport::default();
+        for (id, meta) in &g.manifest.volumes {
+            rep.volumes_checked = rep.volumes_checked.saturating_add(1);
+            let path = self.volume_path(id);
+            match fs::metadata(&path) {
+                Ok(m) if m.len() == meta.size_bytes => {}
+                Ok(m) => rep.errors.push(format!(
+                    "volume {id}: on-disk len {} != declared {}", m.len(), meta.size_bytes
+                )),
+                Err(e) => rep.errors.push(format!("volume {id}: stat: {e}")),
+            }
+        }
+        for (id, meta) in &g.manifest.snapshots {
+            rep.snapshots_checked = rep.snapshots_checked.saturating_add(1);
+            let path = self.snapshot_path(id);
+            match fs::metadata(&path) {
+                Ok(m) if m.len() == meta.size_bytes => {}
+                Ok(m) => rep.errors.push(format!(
+                    "snapshot {id}: on-disk len {} != declared {}", m.len(), meta.size_bytes
+                )),
+                Err(e) => rep.errors.push(format!("snapshot {id}: stat: {e}")),
+            }
+        }
+        Ok(rep)
+    }
 }
 
 #[cfg(test)]

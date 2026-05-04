@@ -192,10 +192,13 @@ impl Membership {
         }
     }
 
-    /// Run the failure detector. Returns the number of rows whose
-    /// state changed.
-    pub fn tick(&mut self, now: Instant) -> usize {
-        let mut changed = 0;
+    /// Run the failure detector. Returns counts of state changes
+    /// observed during this tick. W17 widened the return type from a
+    /// bare `usize` so the mesh metrics layer can record `Alive →
+    /// Suspect` and `* → Dead` transitions in O(1) per tick without
+    /// having to snapshot the whole table.
+    pub fn tick(&mut self, now: Instant) -> TickDelta {
+        let mut delta = TickDelta::default();
         for (id, row) in self.rows.iter_mut() {
             if id == &self.self_id { continue; }
             if matches!(row.status, NodeStatus::Left | NodeStatus::Dead) {
@@ -211,12 +214,30 @@ impl Membership {
                 NodeStatus::Alive
             };
             if next != row.status {
+                delta.state_changes += 1;
+                if row.status == NodeStatus::Alive && next == NodeStatus::Suspect {
+                    delta.suspect_promotions += 1;
+                }
+                if next == NodeStatus::Dead {
+                    delta.dead_promotions += 1;
+                }
                 row.status = next;
-                changed += 1;
             }
         }
-        changed
+        delta
     }
+}
+
+/// Output of a single failure-detector tick. Aggregated by the mesh
+/// metrics layer; tests assert against `state_changes`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TickDelta {
+    /// Total number of rows whose status changed this tick.
+    pub state_changes: usize,
+    /// Subset of `state_changes`: Alive → Suspect transitions.
+    pub suspect_promotions: usize,
+    /// Subset of `state_changes`: any → Dead transitions.
+    pub dead_promotions: usize,
 }
 
 #[cfg(test)]
@@ -285,5 +306,31 @@ mod tests {
         m.mark_left(&id);
         m.mark_left(&id);
         assert_eq!(m.get(&id).unwrap().status, NodeStatus::Left);
+    }
+
+    #[test]
+    fn tick_delta_counts_promotions() {
+        let mut m = mk();
+        m.merge(row("peer", 1, 1, NodeStatus::Alive));
+        let id = NodeId::from("peer");
+        // Push the row past the suspect threshold.
+        m.locals.get_mut(&id).unwrap().last_seen =
+            Instant::now() - Duration::from_millis(60);
+        let d = m.tick(Instant::now());
+        assert_eq!(d.state_changes, 1);
+        assert_eq!(d.suspect_promotions, 1);
+        assert_eq!(d.dead_promotions, 0);
+
+        // Past the dead threshold.
+        m.locals.get_mut(&id).unwrap().last_seen =
+            Instant::now() - Duration::from_millis(150);
+        let d = m.tick(Instant::now());
+        assert_eq!(d.state_changes, 1);
+        assert_eq!(d.suspect_promotions, 0);
+        assert_eq!(d.dead_promotions, 1);
+
+        // No further changes — already Dead.
+        let d = m.tick(Instant::now());
+        assert_eq!(d, TickDelta::default());
     }
 }

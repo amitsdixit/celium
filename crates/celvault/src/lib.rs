@@ -152,6 +152,46 @@ pub const MAX_MOUNT: usize = 32;
 /// Hard cap on volume size to keep accidental allocations bounded.
 pub const MAX_VOLUME_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Per-volume usage statistics. W17 added this surface so the
+/// observability collector and the operator CLI can report real
+/// storage state without scraping internal types. The struct is
+/// intentionally cheap to compute — every field is derived from
+/// already-tracked metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeStats {
+    /// Volume the stats refer to.
+    pub id: VolumeId,
+    /// Logical size as declared at creation time.
+    pub size_bytes: u64,
+    /// Snapshots currently held against this volume.
+    pub snapshot_count: u32,
+    /// Sum of the captured bodies' declared sizes. Mirrors what the
+    /// supervisor would have to copy if the volume were rebuilt
+    /// purely from snapshots.
+    pub total_snapshot_bytes: u64,
+}
+
+/// Result of a [`VolumeStore::integrity_check`] pass. The check is
+/// a fast pointer-walk: every volume's body is opened and its
+/// length is compared with `VolumeMeta::size_bytes`. Body bytes
+/// themselves are not hashed — that is reserved for a future
+/// `verify` API which will be policy-driven.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct IntegrityReport {
+    /// Number of volumes inspected.
+    pub volumes_checked: u32,
+    /// Number of snapshots inspected.
+    pub snapshots_checked: u32,
+    /// Per-resource error strings. Empty means clean.
+    pub errors: Vec<String>,
+}
+
+impl IntegrityReport {
+    /// `true` if the report contains no error rows.
+    #[must_use]
+    pub fn is_clean(&self) -> bool { self.errors.is_empty() }
+}
+
 /// Per-node volume store API.
 ///
 /// Implementations must be `Send + Sync` and internally locked. The
@@ -194,6 +234,77 @@ pub trait VolumeStore: Send + Sync {
     /// volume cannot be found, or if the volume's size has changed
     /// since the snapshot was taken.
     fn restore_snapshot(&self, id: &SnapshotId) -> CelResult<()>;
+
+    // -- W17 durability + observability ------------------------------------
+
+    /// Flush every pending durable change to stable media. The
+    /// in-memory store is a no-op; the disk-backed store fsyncs the
+    /// manifest. Implementations must be safe to call after every
+    /// mutating op or once at shutdown — both patterns are valid.
+    ///
+    /// # Errors
+    /// Returns [`CelError::Storage`] if the underlying backing store
+    /// reports a sync failure.
+    fn flush(&self) -> CelResult<()> { Ok(()) }
+
+    /// Per-volume usage snapshot. Default impl computes counts from
+    /// `list_snapshots`; specialised stores may override for speed.
+    ///
+    /// # Errors
+    /// Returns [`CelError::Invalid`] if `id` is unknown to the store.
+    fn stats(&self, id: &VolumeId) -> CelResult<VolumeStats> {
+        let meta = self.get(id).ok_or(CelError::Invalid("stats: unknown volume"))?;
+        let snaps = self.list_snapshots(Some(id));
+        let total = snaps.iter().map(|s| s.size_bytes).fold(0u64, u64::saturating_add);
+        let count = u32::try_from(snaps.len()).unwrap_or(u32::MAX);
+        Ok(VolumeStats {
+            id: meta.id,
+            size_bytes: meta.size_bytes,
+            snapshot_count: count,
+            total_snapshot_bytes: total,
+        })
+    }
+
+    /// Walk every volume + snapshot and compare the recorded
+    /// `size_bytes` with the body size we can actually read. The
+    /// default impl uses [`VolumeStore::read`] / `list_snapshots`,
+    /// which is enough for both reference impls today; specialised
+    /// stores may override to short-circuit (e.g. compare on-disk
+    /// length without reading every byte).
+    ///
+    /// # Errors
+    /// Currently infallible — every issue surfaces as a row in the
+    /// returned report.
+    fn integrity_check(&self) -> CelResult<IntegrityReport> {
+        let mut rep = IntegrityReport::default();
+        for v in self.list() {
+            rep.volumes_checked = rep.volumes_checked.saturating_add(1);
+            // Read the trailing byte (if any) so a torn body shows up.
+            if v.size_bytes > 0 {
+                let off = v.size_bytes - 1;
+                if let Err(e) = self.read(&v.id, off, 1) {
+                    rep.errors.push(format!("volume {}: {e}", v.id));
+                }
+            }
+        }
+        for s in self.list_snapshots(None) {
+            rep.snapshots_checked = rep.snapshots_checked.saturating_add(1);
+            // Snapshot bytes are not exposed via `read` so we just
+            // check size consistency against the parent volume.
+            match self.get(&s.volume) {
+                None => rep.errors.push(format!(
+                    "snapshot {}: parent volume {} missing", s.id, s.volume
+                )),
+                Some(parent) if parent.size_bytes != s.size_bytes =>
+                    rep.errors.push(format!(
+                        "snapshot {}: size {} != parent {} ({})",
+                        s.id, s.size_bytes, s.volume, parent.size_bytes
+                    )),
+                Some(_) => {}
+            }
+        }
+        Ok(rep)
+    }
 }
 
 /// Reference in-memory implementation of [`VolumeStore`].
