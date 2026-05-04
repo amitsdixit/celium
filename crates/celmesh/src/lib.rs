@@ -27,8 +27,10 @@
 
 pub mod federation;
 pub mod host;
+pub mod k8s;
 pub mod membership;
 pub mod mesh;
+pub mod observability;
 pub mod proto;
 pub mod transport;
 pub mod capabilities;
@@ -37,16 +39,20 @@ pub use capabilities::Capabilities;
 
 pub use federation::{NamespaceFederation, RemoteVm, RestartPolicy};
 pub use host::{MemVmHost, VmHost};
+pub use k8s::{K8sCluster, K8sClusterSpec, K8sNodeRole, K8sNodeRecord};
 pub use membership::{Membership, NodeId, NodeInfo, NodeStatus};
 pub use mesh::{ClusterStatus, Mesh, MeshConfig, RestartedVm};
+pub use observability::{ClusterReport, NodeReport, VolumeUsage};
 pub use proto::{VmOp, VmOpReply};
 pub use transport::{MemTransport, MemTransportFactory, Transport, UdpTransport};
 
-// Re-export celvault's volume surface so downstream crates only need
-// to depend on celmesh.
+// Re-export celvault's volume + networking surface so downstream
+// crates only need to depend on celmesh.
 pub use celvault::{
-    FileVolumeStore, MemVolumeStore, SnapshotId, SnapshotMeta,
-    VolumeAttachment, VolumeId, VolumeMeta, VolumeStore,
+    Cidr4, Direction, FileVolumeStore, L4Proto, LbAlgo, LbBackend, LoadBalancer,
+    LoadBalancerId, MemNetworkStore, MemVolumeStore, NetworkId, NetworkStore, Nic, NicId,
+    SecurityGroup, SecurityGroupId, SecurityRule, SnapshotId, SnapshotMeta,
+    VirtualNetwork, VolumeAttachment, VolumeId, VolumeMeta, VolumeStore,
 };
 
 use celcommon::CelResult;

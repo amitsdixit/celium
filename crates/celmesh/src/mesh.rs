@@ -560,7 +560,19 @@ impl Mesh {
             | VmOp::CreateSnapshot { .. }
             | VmOp::ListSnapshots { .. }
             | VmOp::DeleteSnapshot { .. }
-            | VmOp::RestoreSnapshot { .. } => {}
+            | VmOp::RestoreSnapshot { .. }
+            | VmOp::CreateNetwork { .. }
+            | VmOp::DeleteNetwork { .. }
+            | VmOp::ListNetworks
+            | VmOp::DetachNic { .. }
+            | VmOp::ListNics
+            | VmOp::CreateSecurityGroup { .. }
+            | VmOp::DeleteSecurityGroup { .. }
+            | VmOp::ListSecurityGroups
+            | VmOp::CreateLoadBalancer { .. }
+            | VmOp::DeleteLoadBalancer { .. }
+            | VmOp::ListLoadBalancers => {}
+            VmOp::AttachNic { vm_id: v, .. } => { *v = vm_id; }
         }
         self.invoke(&owner, op, wait).await
     }

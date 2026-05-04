@@ -698,6 +698,29 @@ async fn cluster_invoke(args: InvokeArgs) -> CelResult<()> {
             println!("deleted snapshot {snapshot_id}"),
         VmOpReply::SnapshotRestored { snapshot_id } =>
             println!("restored snapshot {snapshot_id}"),
+        // W15 networking replies — pretty-printed by the dedicated
+        // `cluster network/secgroup/lb` subcommands; this generic
+        // path just acknowledges them.
+        VmOpReply::NetworkCreated { network }      => println!("created network {} ({})", network.id, network.cidr),
+        VmOpReply::NetworkDeleted { network_id }   => println!("deleted network {network_id}"),
+        VmOpReply::NetworksListed { networks }     => {
+            for n in networks { println!("{}  {}  {}", n.id, n.name, n.cidr); }
+        }
+        VmOpReply::NicAttached { nic }             => println!("nic {} ip={} vm={}", nic.id, nic.ip, nic.vm_id),
+        VmOpReply::NicDetached { nic_id }          => println!("detached nic {nic_id}"),
+        VmOpReply::NicsListed { nics }             => {
+            for n in nics { println!("{}  vm={}  ip={}", n.id, n.vm_id, n.ip); }
+        }
+        VmOpReply::SecurityGroupCreated { sg }     => println!("created sg {} ({} rules)", sg.id, sg.rules.len()),
+        VmOpReply::SecurityGroupDeleted { sg_id }  => println!("deleted sg {sg_id}"),
+        VmOpReply::SecurityGroupsListed { sgs }    => {
+            for s in sgs { println!("{}  {}  rules={}", s.id, s.name, s.rules.len()); }
+        }
+        VmOpReply::LoadBalancerCreated { lb }      => println!("created lb {} vip={}:{}", lb.id, lb.vip, lb.frontend_port),
+        VmOpReply::LoadBalancerDeleted { lb_id }   => println!("deleted lb {lb_id}"),
+        VmOpReply::LoadBalancersListed { lbs }     => {
+            for l in lbs { println!("{}  vip={}:{}  backends={}", l.id, l.vip, l.frontend_port, l.backends.len()); }
+        }
     }
     let _ = mesh.shutdown().await;
     Ok(())

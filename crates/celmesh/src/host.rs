@@ -17,7 +17,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use celvault::{MemVolumeStore, VolumeAttachment, VolumeStore};
+use celvault::{
+    Cidr4, MemNetworkStore, MemVolumeStore, NetworkStore, VolumeAttachment, VolumeStore,
+};
 
 use crate::capabilities::Capabilities;
 use crate::federation::{RemoteVm, RestartPolicy};
@@ -88,6 +90,9 @@ struct Slot {
 pub struct MemVmHost {
     slots: Mutex<[Option<Slot>; MAX_SLOTS]>,
     vault: Arc<dyn VolumeStore>,
+    /// W15: per-node networking control-plane store. Holds virtual
+    /// networks, NICs, security groups, and load balancers.
+    nets:  Arc<dyn NetworkStore>,
     /// Owner node id used when minting volume ids. Set the first
     /// time `snapshot` runs so `MemVolumeStore` ids match the
     /// convention `<node>/v<n>`.
@@ -115,6 +120,24 @@ impl MemVmHost {
         Self {
             slots: Mutex::new(Default::default()),
             vault,
+            nets:  Arc::new(MemNetworkStore::new()),
+            owner: Mutex::new(None),
+            caps:  Capabilities::ALL,
+        }
+    }
+
+    /// W15: construct a host with explicit volume **and** network
+    /// stores. Tests and the K8s personality use this to seed both
+    /// stores up-front.
+    #[must_use]
+    pub fn with_stores(
+        vault: Arc<dyn VolumeStore>,
+        nets:  Arc<dyn NetworkStore>,
+    ) -> Self {
+        Self {
+            slots: Mutex::new(Default::default()),
+            vault,
+            nets,
             owner: Mutex::new(None),
             caps:  Capabilities::ALL,
         }
@@ -135,6 +158,11 @@ impl MemVmHost {
     /// Borrow the volume store. Useful for tests.
     #[must_use]
     pub fn vault(&self) -> Arc<dyn VolumeStore> { self.vault.clone() }
+
+    /// W15: borrow the networking store. Useful for tests and the
+    /// K8s personality which inspects allocated NICs locally.
+    #[must_use]
+    pub fn nets(&self) -> Arc<dyn NetworkStore> { self.nets.clone() }
 
     fn lock_slots(&self) -> std::sync::MutexGuard<'_, [Option<Slot>; MAX_SLOTS]> {
         // SAFETY-comment scope only: this is `std::sync::Mutex`. A
@@ -318,6 +346,90 @@ impl MemVmHost {
                     .restore_snapshot(&snapshot_id)
                     .map_err(|e| format!("vault snapshot restore: {e:?}"))?;
                 Ok(VmOpReply::SnapshotRestored { snapshot_id })
+            }
+            // -- W15 networking ops ---------------------------------------
+            VmOp::CreateNetwork { name, cidr } => {
+                let owner = self.current_owner()
+                    .ok_or_else(|| "net: owner not yet known; snapshot first".to_string())?;
+                let block = Cidr4::parse(&cidr)
+                    .map_err(|e| format!("net create: {e:?}"))?;
+                let net = self.nets
+                    .create_network(&owner, &name, block)
+                    .map_err(|e| format!("net create: {e:?}"))?;
+                Ok(VmOpReply::NetworkCreated { network: net })
+            }
+            VmOp::DeleteNetwork { network_id } => {
+                self.nets
+                    .delete_network(&network_id)
+                    .map_err(|e| format!("net delete: {e:?}"))?;
+                Ok(VmOpReply::NetworkDeleted { network_id })
+            }
+            VmOp::ListNetworks => {
+                Ok(VmOpReply::NetworksListed { networks: self.nets.list_networks() })
+            }
+            VmOp::AttachNic { network_id, vm_id, ip } => {
+                // VM must already exist on this host.
+                {
+                    let mut slots = self.lock_slots();
+                    let _ = Self::slot_mut(&mut slots, vm_id)?;
+                }
+                let parsed = match ip {
+                    Some(s) => Some(s.parse().map_err(|_| "net.nic.attach: bad ip")?),
+                    None    => None,
+                };
+                let nic = self.nets
+                    .attach_nic(&network_id, vm_id, parsed)
+                    .map_err(|e| format!("net.nic.attach: {e:?}"))?;
+                Ok(VmOpReply::NicAttached { nic })
+            }
+            VmOp::DetachNic { nic_id } => {
+                self.nets
+                    .detach_nic(&nic_id)
+                    .map_err(|e| format!("net.nic.detach: {e:?}"))?;
+                Ok(VmOpReply::NicDetached { nic_id })
+            }
+            VmOp::ListNics => {
+                Ok(VmOpReply::NicsListed { nics: self.nets.list_nics() })
+            }
+            // -- W15 security groups --------------------------------------
+            VmOp::CreateSecurityGroup { name, rules } => {
+                let owner = self.current_owner()
+                    .ok_or_else(|| "sg: owner not yet known; snapshot first".to_string())?;
+                let sg = self.nets
+                    .create_security_group(&owner, &name, rules)
+                    .map_err(|e| format!("sg create: {e:?}"))?;
+                Ok(VmOpReply::SecurityGroupCreated { sg })
+            }
+            VmOp::DeleteSecurityGroup { sg_id } => {
+                self.nets
+                    .delete_security_group(&sg_id)
+                    .map_err(|e| format!("sg delete: {e:?}"))?;
+                Ok(VmOpReply::SecurityGroupDeleted { sg_id })
+            }
+            VmOp::ListSecurityGroups => {
+                Ok(VmOpReply::SecurityGroupsListed { sgs: self.nets.list_security_groups() })
+            }
+            // -- W15 load balancers ---------------------------------------
+            VmOp::CreateLoadBalancer { name, network_id, vip, frontend_port, algo, backends } => {
+                let owner = self.current_owner()
+                    .ok_or_else(|| "lb: owner not yet known; snapshot first".to_string())?;
+                let parsed_vip = vip.parse().map_err(|_| "lb create: bad vip")?;
+                let lb = self.nets
+                    .create_load_balancer(
+                        &owner, &name, &network_id,
+                        parsed_vip, frontend_port, algo, backends,
+                    )
+                    .map_err(|e| format!("lb create: {e:?}"))?;
+                Ok(VmOpReply::LoadBalancerCreated { lb })
+            }
+            VmOp::DeleteLoadBalancer { lb_id } => {
+                self.nets
+                    .delete_load_balancer(&lb_id)
+                    .map_err(|e| format!("lb delete: {e:?}"))?;
+                Ok(VmOpReply::LoadBalancerDeleted { lb_id })
+            }
+            VmOp::ListLoadBalancers => {
+                Ok(VmOpReply::LoadBalancersListed { lbs: self.nets.list_load_balancers() })
             }
         }
     }

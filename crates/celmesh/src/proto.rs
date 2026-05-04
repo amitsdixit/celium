@@ -17,7 +17,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::federation::RemoteVm;
 use crate::membership::NodeInfo;
-pub use celvault::{SnapshotId, SnapshotMeta, VolumeAttachment, VolumeId, VolumeMeta};
+pub use celvault::{
+    Cidr4, Direction, L4Proto, LbAlgo, LbBackend, LoadBalancer, LoadBalancerId,
+    NetworkId, Nic, NicId, SecurityGroup, SecurityGroupId, SecurityRule, SnapshotId,
+    SnapshotMeta, VirtualNetwork, VolumeAttachment, VolumeId, VolumeMeta,
+};
 /// Protocol version. Bump on incompatible wire changes — receivers
 /// drop frames whose `version` they do not recognise.
 pub const PROTO_VERSION: u32 = 1;
@@ -192,6 +196,83 @@ pub enum VmOp {
         /// Snapshot to restore.
         snapshot_id: SnapshotId,
     },
+
+    // -- W15: networking --------------------------------------------------
+
+    /// W15: create a virtual network.
+    CreateNetwork {
+        /// Free-form network name (≤ `celvault::network::MAX_NAME`).
+        name: String,
+        /// CIDR block in `"10.0.0.0/24"` form.
+        cidr: String,
+    },
+    /// W15: delete a virtual network. Errors if NICs are attached.
+    DeleteNetwork {
+        /// Target network.
+        network_id: NetworkId,
+    },
+    /// W15: list known networks on the receiving node.
+    ListNetworks,
+    /// W15: allocate a NIC for `vm_id` on `network_id`.
+    AttachNic {
+        /// Target network.
+        network_id: NetworkId,
+        /// VM slot id (must already exist on the receiving node).
+        vm_id: u32,
+        /// Optional explicit IP request; `None` for auto-allocate.
+        #[serde(default)]
+        ip: Option<String>,
+    },
+    /// W15: detach (and free) a NIC. Idempotent.
+    DetachNic {
+        /// NIC to free.
+        nic_id: NicId,
+    },
+    /// W15: list every NIC the receiving node knows about.
+    ListNics,
+
+    // -- W15: security groups ---------------------------------------------
+
+    /// W15: create a security group with `rules`.
+    CreateSecurityGroup {
+        /// Group name.
+        name: String,
+        /// Ordered rule list.
+        rules: Vec<SecurityRule>,
+    },
+    /// W15: delete a security group. Idempotent.
+    DeleteSecurityGroup {
+        /// Group to delete.
+        sg_id: SecurityGroupId,
+    },
+    /// W15: list every security group the receiving node knows about.
+    ListSecurityGroups,
+
+    // -- W15: load balancers ----------------------------------------------
+
+    /// W15: create a load balancer.
+    CreateLoadBalancer {
+        /// Free-form name.
+        name: String,
+        /// Network the LB sits on.
+        network_id: NetworkId,
+        /// Front-end VIP (must be inside the network's CIDR).
+        vip: String,
+        /// Front-end port.
+        frontend_port: u16,
+        /// Distribution policy.
+        #[serde(default)]
+        algo: LbAlgo,
+        /// Backend list.
+        backends: Vec<LbBackend>,
+    },
+    /// W15: delete a load balancer. Idempotent.
+    DeleteLoadBalancer {
+        /// LB to delete.
+        lb_id: LoadBalancerId,
+    },
+    /// W15: list every load balancer the receiving node knows about.
+    ListLoadBalancers,
 }
 
 /// Reply to a [`VmOp`]. Tagged so the wire form is human-readable.
@@ -276,6 +357,71 @@ pub enum VmOpReply {
     SnapshotRestored {
         /// Snapshot id that was restored.
         snapshot_id: SnapshotId,
+    },
+
+    // -- W15 networking replies -------------------------------------------
+
+    /// W15: returned for `CreateNetwork`.
+    NetworkCreated {
+        /// Newly-created network metadata.
+        network: VirtualNetwork,
+    },
+    /// W15: returned for `DeleteNetwork`.
+    NetworkDeleted {
+        /// Network id that was removed.
+        network_id: NetworkId,
+    },
+    /// W15: returned for `ListNetworks`.
+    NetworksListed {
+        /// Every network the receiving node knows.
+        networks: Vec<VirtualNetwork>,
+    },
+    /// W15: returned for `AttachNic`.
+    NicAttached {
+        /// Newly-allocated NIC.
+        nic: Nic,
+    },
+    /// W15: returned for `DetachNic`.
+    NicDetached {
+        /// NIC that was freed.
+        nic_id: NicId,
+    },
+    /// W15: returned for `ListNics`.
+    NicsListed {
+        /// Every NIC the receiving node knows.
+        nics: Vec<Nic>,
+    },
+
+    /// W15: returned for `CreateSecurityGroup`.
+    SecurityGroupCreated {
+        /// Newly-created group.
+        sg: SecurityGroup,
+    },
+    /// W15: returned for `DeleteSecurityGroup`.
+    SecurityGroupDeleted {
+        /// Group id that was removed.
+        sg_id: SecurityGroupId,
+    },
+    /// W15: returned for `ListSecurityGroups`.
+    SecurityGroupsListed {
+        /// Every group the receiving node knows.
+        sgs: Vec<SecurityGroup>,
+    },
+
+    /// W15: returned for `CreateLoadBalancer`.
+    LoadBalancerCreated {
+        /// Newly-created LB.
+        lb: LoadBalancer,
+    },
+    /// W15: returned for `DeleteLoadBalancer`.
+    LoadBalancerDeleted {
+        /// LB id that was removed.
+        lb_id: LoadBalancerId,
+    },
+    /// W15: returned for `ListLoadBalancers`.
+    LoadBalancersListed {
+        /// Every LB the receiving node knows.
+        lbs: Vec<LoadBalancer>,
     },
 }
 

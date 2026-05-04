@@ -61,6 +61,22 @@ impl Capabilities {
     /// `RestoreSnapshot`.
     pub const SNAPSHOT_WRITE:       Self = Self(1 << 6);
 
+    /// W15 read-only network ops: `ListNetworks`, `ListNics`.
+    pub const NETWORK_READ:         Self = Self(1 << 7);
+    /// W15 mutating network ops: `CreateNetwork`, `DeleteNetwork`,
+    /// `AttachNic`, `DetachNic`.
+    pub const NETWORK_WRITE:        Self = Self(1 << 8);
+    /// W15 read-only security group ops: `ListSecurityGroups`.
+    pub const SECGROUP_READ:        Self = Self(1 << 9);
+    /// W15 mutating security group ops: `CreateSecurityGroup`,
+    /// `DeleteSecurityGroup`.
+    pub const SECGROUP_WRITE:       Self = Self(1 << 10);
+    /// W15 read-only load-balancer ops: `ListLoadBalancers`.
+    pub const LB_READ:              Self = Self(1 << 11);
+    /// W15 mutating load-balancer ops: `CreateLoadBalancer`,
+    /// `DeleteLoadBalancer`.
+    pub const LB_WRITE:             Self = Self(1 << 12);
+
     /// Every capability granted. The default for [`MemVmHost::new`]
     /// so back-compat tests don't have to wire caps explicitly.
     pub const ALL: Self = Self(
@@ -70,7 +86,13 @@ impl Capabilities {
             | Self::VOLUME_WRITE.0
             | Self::VOLUME_ATTACH.0
             | Self::SNAPSHOT_READ.0
-            | Self::SNAPSHOT_WRITE.0,
+            | Self::SNAPSHOT_WRITE.0
+            | Self::NETWORK_READ.0
+            | Self::NETWORK_WRITE.0
+            | Self::SECGROUP_READ.0
+            | Self::SECGROUP_WRITE.0
+            | Self::LB_READ.0
+            | Self::LB_WRITE.0,
     );
 
     /// Test for a single capability (or any bit-set).
@@ -104,6 +126,18 @@ impl Capabilities {
             | VmOp::DeleteSnapshot { .. }
             | VmOp::RestoreSnapshot { .. }         => Self::SNAPSHOT_WRITE,
             VmOp::ListSnapshots { .. }             => Self::SNAPSHOT_READ,
+            VmOp::CreateNetwork { .. }
+            | VmOp::DeleteNetwork { .. }
+            | VmOp::AttachNic { .. }
+            | VmOp::DetachNic { .. }               => Self::NETWORK_WRITE,
+            VmOp::ListNetworks
+            | VmOp::ListNics                       => Self::NETWORK_READ,
+            VmOp::CreateSecurityGroup { .. }
+            | VmOp::DeleteSecurityGroup { .. }     => Self::SECGROUP_WRITE,
+            VmOp::ListSecurityGroups               => Self::SECGROUP_READ,
+            VmOp::CreateLoadBalancer { .. }
+            | VmOp::DeleteLoadBalancer { .. }      => Self::LB_WRITE,
+            VmOp::ListLoadBalancers                => Self::LB_READ,
         }
     }
 
@@ -127,6 +161,18 @@ impl Capabilities {
             VmOp::ListSnapshots   { .. } => "snap.list",
             VmOp::DeleteSnapshot  { .. } => "snap.delete",
             VmOp::RestoreSnapshot { .. } => "snap.restore",
+            VmOp::CreateNetwork   { .. } => "net.create",
+            VmOp::DeleteNetwork   { .. } => "net.delete",
+            VmOp::ListNetworks           => "net.list",
+            VmOp::AttachNic       { .. } => "net.nic.attach",
+            VmOp::DetachNic       { .. } => "net.nic.detach",
+            VmOp::ListNics               => "net.nic.list",
+            VmOp::CreateSecurityGroup { .. } => "sg.create",
+            VmOp::DeleteSecurityGroup { .. } => "sg.delete",
+            VmOp::ListSecurityGroups         => "sg.list",
+            VmOp::CreateLoadBalancer  { .. } => "lb.create",
+            VmOp::DeleteLoadBalancer  { .. } => "lb.delete",
+            VmOp::ListLoadBalancers          => "lb.list",
         }
     }
 }

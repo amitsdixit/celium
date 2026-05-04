@@ -27,6 +27,7 @@
 #![warn(missing_docs, rust_2018_idioms)]
 
 mod file_store;
+pub mod network;
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -35,6 +36,11 @@ use celcommon::{CelError, CelResult};
 use serde::{Deserialize, Serialize};
 
 pub use file_store::FileVolumeStore;
+pub use network::{
+    Cidr4, Direction, L4Proto, LbAlgo, LbBackend, LoadBalancer, LoadBalancerId,
+    MemNetworkStore, NetworkId, NetworkStore, Nic, NicId, SecurityGroup, SecurityGroupId,
+    SecurityRule, VirtualNetwork,
+};
 
 /// Returns `Ok(())` once the vault subsystem has been initialised.
 ///
