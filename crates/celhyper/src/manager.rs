@@ -157,10 +157,14 @@ pub fn create_vm_with<P: FrameProvider>(
 }
 
 /// Mark the VM `Running`, register it with the scheduler, and execute
-/// `vmlaunch`. On hardware without working VT-x (the dev box) the
-/// `Hardware`/`Internal` errors from [`launch::vmlaunch`] are caught,
-/// logged as `vmlaunch deferred`, and the VM is transitioned to
-/// `Stopped` so callers see a clean terminal state.
+/// `vmlaunch`. The launch path is currently a stub: `start_vm` does not
+/// yet call [`launch::write_vmcs`] or [`crate::vmx::host_state::write_host_state`],
+/// so `vmlaunch` against the still-empty VMCS returns `VMfailInvalid`
+/// from SDM §26 entry checks. We catch that error, log it as
+/// `vmlaunch deferred`, and transition the VM to `Stopped` so callers
+/// see a clean terminal state. This is independent of whether VT-x is
+/// present on the host — `init_runtime` already executed `vmxon`
+/// successfully by the time we get here.
 pub fn start_vm(id: VmId) -> HyperResult<()> {
     let vm = lookup(id)?;
 
@@ -172,7 +176,10 @@ pub fn start_vm(id: VmId) -> HyperResult<()> {
     match launch::vmlaunch() {
         Ok(()) => Ok(()),
         Err(HyperError::Internal(_) | HyperError::Hardware(_)) => {
-            crate::logger::log("celhyper: vmlaunch deferred (no VT-x on this CPU)");
+            crate::logger::log(
+                "celhyper: vmlaunch deferred (VMCS not yet populated; \
+                 write_vmcs/host_state/EPT wiring pending)",
+            );
             // Best-effort terminal transition; ignore the error if the
             // dispatcher already moved us to Halted/Faulted.
             let _ = vm.stop();

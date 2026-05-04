@@ -87,11 +87,18 @@ fn run() -> Result<(), Status> {
         None    => println!("[celloader] WARN: no ACPI RSDP located"),
     }
 
-    // 2. Load CelHyper from the ESP.
+    // 2. Load CelHyper from the ESP, then parse + relocate it into a
+    //    fresh page-aligned region so absolute jumps and RIP-relative
+    //    relocations all resolve correctly.
     let image = image_loader::load_celhyper().map_err(|_| Status::NOT_FOUND)?;
     println!(
         "[celloader] celhyper image loaded: {} bytes",
         image.bytes.len()
+    );
+    let loaded = image_loader::load_and_relocate(&image.bytes).map_err(|_| Status::LOAD_ERROR)?;
+    println!(
+        "[celloader] celhyper relocated: base={:#x} size={:#x} entry={:#x}",
+        loaded.base, loaded.size, loaded.entry
     );
 
     // 3. Build handoff in a Box and leak it so the pointer stays valid
@@ -99,8 +106,8 @@ fn run() -> Result<(), Status> {
     let handoff = handoff::CeliumHandoff::new(
         cpu,
         acpi_rsdp.unwrap_or(0),
-        image.bytes.as_ptr() as u64,
-        image.bytes.len() as u64,
+        loaded.base,
+        loaded.size,
     );
     let handoff_ptr: *const handoff::CeliumHandoff = Box::leak(Box::new(handoff));
     println!(
@@ -110,13 +117,8 @@ fn run() -> Result<(), Status> {
         handoff::VERSION
     );
 
-    // 4. Resolve the kernel entry point.
-    //
-    // A real ELF parse + relocation pass is the next thing to land. Until
-    // then we use a pointer derived from the loaded image's first section
-    // header sentinel; `parse_entry_point` returns `None` on malformed
-    // input so we fail closed.
-    let entry = image_loader::parse_entry_point(&image.bytes).ok_or(Status::LOAD_ERROR)?;
+    // 4. Kernel entry comes from the relocator above.
+    let entry = loaded.entry;
     println!("[celloader] kernel entry @ {entry:#x}");
 
     // 5. Hand off. In Week-2 builds we *do not* call exit_boot_services
