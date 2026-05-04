@@ -1,0 +1,2 @@
+# Empty — workspace integration tests live under each crate's `tests/`.
+# This file exists so `tests/` is tracked.

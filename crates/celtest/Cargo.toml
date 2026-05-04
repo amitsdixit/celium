@@ -1,0 +1,17 @@
+[package]
+name         = "celtest"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+description  = "Celium test harness + chaos (placeholder)."
+
+[dependencies]
+celcommon = { workspace = true }
+tracing   = { workspace = true }
+
+[dev-dependencies]
+celmesh   = { workspace = true }
+tokio     = { workspace = true }

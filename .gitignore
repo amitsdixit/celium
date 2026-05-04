@@ -1,0 +1,19 @@
+# Build artifacts
+/target
+**/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Boot images / VM artifacts
+*.img
+*.iso
+*.efi.bak

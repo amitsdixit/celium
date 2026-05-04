@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/celcommon",
+    "crates/celmesh",
+    "crates/celvault",
+    "crates/celcli",
+    "crates/celtest",
+]
+# Bare-metal crates are stand-alone packages built against custom targets.
+exclude = [
+    "bootloader/celloader",
+    "crates/celhyper",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.82"
+license      = "Apache-2.0 OR MIT"
+authors      = ["The Celium Authors"]
+repository   = "https://github.com/celium/celium"
+
+[workspace.dependencies]
+# Async / concurrency
+tokio       = { version = "1.40", features = ["full"] }
+
+# Errors / logging / observability (per 00_GLOBAL_CONVENTIONS.md)
+thiserror   = "1"
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+prometheus  = "0.13"
+
+# Serde
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+
+# CLI
+clap        = { version = "4", features = ["derive"] }
+
+# Internal
+celcommon   = { path = "crates/celcommon" }
+celmesh     = { path = "crates/celmesh" }
+celvault    = { path = "crates/celvault" }
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+debug         = "line-tables-only"
+panic         = "abort"
+overflow-checks = true

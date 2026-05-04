@@ -1,0 +1,6 @@
+# Workspace-level cargo config. Per-package targets live in each bare-metal
+# package's own .cargo/config.toml so the std workspace stays on host triple.
+[build]
+
+[net]
+git-fetch-with-cli = true

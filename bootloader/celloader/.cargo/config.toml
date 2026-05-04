@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-unknown-uefi"
+
+[unstable]
+# none required on stable; rust-src is provided by the workspace toolchain
+# in case future bare-metal helpers need to rebuild core.

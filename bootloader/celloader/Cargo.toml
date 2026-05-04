@@ -1,0 +1,37 @@
+[package]
+name        = "celloader"
+version     = "0.1.0"
+edition     = "2021"
+rust-version = "1.82"
+license     = "Apache-2.0 OR MIT"
+authors     = ["The Celium Authors"]
+description = "Celium UEFI stage-0 boot loader. Loads CelHyper and hands off a measured environment."
+
+# Standalone — not part of the std workspace.
+[workspace]
+
+[[bin]]
+name = "celloader"
+path = "src/main.rs"
+
+[dependencies]
+# UEFI services. `panic-handler` provides the required #[panic_handler]
+# (we keep it as a defence-in-depth — production code returns Status::ABORTED).
+uefi = { version = "0.32", features = ["alloc", "global_allocator", "panic_handler", "logger"] }
+log  = "0.4"
+
+[features]
+# Default build is observable: it stops just short of ExitBootServices so a
+# QEMU+OVMF dry-run can dump discovery results to the console without
+# bricking the firmware. Set `--features real-handoff` to actually
+# exit boot services and jmp to the kernel.
+default       = []
+real-handoff  = []
+
+[profile.release]
+opt-level     = "z"        # CelLoader budget: ≤ 64 KiB.
+lto           = true
+codegen-units = 1
+panic         = "abort"
+strip         = true
+overflow-checks = true

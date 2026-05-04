@@ -1,0 +1,20 @@
+[package]
+name         = "celmesh"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+description  = "Celium gossip + membership + federated namespace fabric."
+
+[dependencies]
+celcommon          = { workspace = true }
+celvault           = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+
+[dev-dependencies]
+tokio              = { workspace = true }

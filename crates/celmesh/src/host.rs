@@ -1,0 +1,392 @@
+//! Host-side hook for cross-node VM operations.
+//!
+//! A `VmHost` is whatever runs the actual single-node VM lifecycle —
+//! today that's the in-memory `celcli::vm::Controller`, tomorrow the
+//! real CelHyper manager.
+//!
+//! `Mesh::set_host` registers an implementation; whenever the gossip
+//! receiver decodes a `Payload::Request` whose `target` matches our
+//! own id, the mesh dispatches the operation to the host and ships
+//! the reply back over the same transport.
+//!
+//! The trait is `async`-shaped without pulling in `async-trait` —
+//! every method returns a pinned boxed future, mirroring the style
+//! used by [`crate::transport::Transport`].
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+
+use celvault::{MemVolumeStore, VolumeAttachment, VolumeStore};
+
+use crate::federation::{RemoteVm, RestartPolicy};
+use crate::membership::NodeId;
+use crate::proto::{VmOp, VmOpReply};
+
+/// Boxed future result alias used by the host trait.
+pub type HostFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Operation outcome surfaced to callers. Errors are stringly-typed
+/// because they cross a node boundary; callers map them back into
+/// `CelError::Io` or `CelError::Invalid` as appropriate.
+pub type HostResult = Result<VmOpReply, String>;
+
+/// Trait implemented by anything that can run a VM lifecycle on a
+/// node. The mesh calls `handle` to apply an op and `snapshot` after
+/// every successful op so it can republish the federated rows.
+pub trait VmHost: Send + Sync {
+    /// Apply `op`. Implementations must not panic.
+    fn handle<'a>(&'a self, op: VmOp) -> HostFut<'a, HostResult>;
+    /// Return the host's current local-VM list.
+    fn snapshot<'a>(&'a self, owner: &'a NodeId) -> HostFut<'a, Vec<RemoteVm>>;
+    /// Week-12: install a list of preserved volume attachments on
+    /// `vm_id` without consulting the local vault. Used by the
+    /// supervisor when reviving an orphan VM whose volumes may live
+    /// on a third (still-Alive) node. The default returns an error
+    /// so legacy `VmHost` impls remain compile-compatible.
+    fn attach_preserved<'a>(
+        &'a self,
+        _vm_id: u32,
+        _attachments: Vec<VolumeAttachment>,
+    ) -> HostFut<'a, Result<(), String>> {
+        Box::pin(async move { Err("attach_preserved: unsupported".to_string()) })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reference in-memory implementation. Used by tests and by the CLI's
+// `cluster start` command when no kernel-side IPC is wired yet.
+// ---------------------------------------------------------------------------
+
+/// Maximum slots — must agree with `celcli::vm::MAX_VMS`.
+const MAX_SLOTS: usize = 4;
+
+#[derive(Debug, Clone)]
+struct Slot {
+    label: String,
+    state: &'static str,
+    last_exit: Option<u32>,
+    restart_policy: RestartPolicy,
+    /// Week-12: volume attachments. Preserved across supervisor
+    /// restarts so a recreated VM keeps its persistent volumes.
+    volumes: Vec<VolumeAttachment>,
+}
+
+/// Reference in-memory `VmHost`.
+///
+/// Models the same state transitions as `celcli::vm::Controller` —
+/// `Created` → `start` → `Halted` (exit 12) → `stop` (idempotent).
+/// Carries an embedded [`VolumeStore`] so volume CRUD and
+/// attach/detach ops can be served without round-tripping through a
+/// separate vault handle.
+pub struct MemVmHost {
+    slots: Mutex<[Option<Slot>; MAX_SLOTS]>,
+    vault: Arc<dyn VolumeStore>,
+    /// Owner node id used when minting volume ids. Set the first
+    /// time `snapshot` runs so `MemVolumeStore` ids match the
+    /// convention `<node>/v<n>`.
+    owner: Mutex<Option<String>>,
+}
+
+impl Default for MemVmHost {
+    fn default() -> Self { Self::new() }
+}
+
+impl MemVmHost {
+    /// Construct an empty host with a fresh in-memory volume store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_vault(Arc::new(MemVolumeStore::new()))
+    }
+
+    /// Construct an empty host using an explicit volume store. Useful
+    /// for tests that pre-seed volumes or share a store between hosts.
+    #[must_use]
+    pub fn with_vault(vault: Arc<dyn VolumeStore>) -> Self {
+        Self {
+            slots: Mutex::new(Default::default()),
+            vault,
+            owner: Mutex::new(None),
+        }
+    }
+
+    /// Borrow the volume store. Useful for tests.
+    #[must_use]
+    pub fn vault(&self) -> Arc<dyn VolumeStore> { self.vault.clone() }
+
+    fn lock_slots(&self) -> std::sync::MutexGuard<'_, [Option<Slot>; MAX_SLOTS]> {
+        // SAFETY-comment scope only: this is `std::sync::Mutex`. A
+        // poisoned guard means another thread panicked while holding
+        // the lock — no `unsafe` is involved. We surface the panic by
+        // taking the inner value, since no production path can poison
+        // it (no panicking code runs under the guard).
+        match self.slots.lock() {
+            Ok(g)   => g,
+            Err(p)  => p.into_inner(),
+        }
+    }
+
+    fn remember_owner(&self, owner: &NodeId) {
+        // No `unsafe`. Same panic-recovery pattern as `lock_slots`.
+        let mut g = match self.owner.lock() {
+            Ok(g)  => g,
+            Err(p) => p.into_inner(),
+        };
+        if g.is_none() {
+            *g = Some(owner.to_string());
+        }
+    }
+
+    fn current_owner(&self) -> Option<String> {
+        match self.owner.lock() {
+            Ok(g)  => g.clone(),
+            Err(p) => p.into_inner().clone(),
+        }
+    }
+
+    fn apply(&self, op: VmOp) -> HostResult {
+        match op {
+            // -- VM lifecycle ---------------------------------------------
+            VmOp::Create { label, restart_policy } => {
+                let mut slots = self.lock_slots();
+                if label.len() > 32 {
+                    return Err("label > 32 chars".into());
+                }
+                for (i, s) in slots.iter_mut().enumerate() {
+                    if s.is_none() {
+                        *s = Some(Slot {
+                            label,
+                            state: "created",
+                            last_exit: None,
+                            restart_policy,
+                            volumes: Vec::new(),
+                        });
+                        return Ok(VmOpReply::Created { vm_id: i as u32 });
+                    }
+                }
+                Err("vm registry full".into())
+            }
+            VmOp::Start { vm_id } => {
+                let mut slots = self.lock_slots();
+                let s = Self::slot_mut(&mut slots, vm_id)?;
+                if matches!(s.state, "halted" | "stopped" | "faulted") {
+                    return Err("vm already terminal".into());
+                }
+                if s.state == "running" {
+                    return Err("vm already running".into());
+                }
+                s.state = "halted";
+                s.last_exit = Some(12);
+                Ok(VmOpReply::State { vm_id, state: s.state.into() })
+            }
+            VmOp::Stop { vm_id } => {
+                let mut slots = self.lock_slots();
+                let s = Self::slot_mut(&mut slots, vm_id)?;
+                if !matches!(s.state, "halted" | "stopped" | "faulted") {
+                    s.state = "stopped";
+                }
+                Ok(VmOpReply::State { vm_id, state: s.state.into() })
+            }
+            VmOp::Delete { vm_id } => {
+                let mut slots = self.lock_slots();
+                let i = vm_id as usize;
+                if i >= MAX_SLOTS {
+                    return Err("vm id out of range".into());
+                }
+                let s = slots[i].as_ref().ok_or_else(|| "vm not allocated".to_string())?;
+                if !matches!(s.state, "halted" | "stopped" | "faulted") {
+                    return Err("vm not terminal; stop first".into());
+                }
+                slots[i] = None;
+                Ok(VmOpReply::Deleted { vm_id })
+            }
+            VmOp::List => Ok(VmOpReply::Listed { rows: Vec::new() }),
+            // -- Week-12 volume ops ---------------------------------------
+            VmOp::CreateVolume { name, size_bytes } => {
+                let owner = self.current_owner()
+                    .ok_or_else(|| "vault: owner not yet known; snapshot first".to_string())?;
+                let meta = self.vault
+                    .create(&owner, &name, size_bytes)
+                    .map_err(|e| format!("vault create: {e:?}"))?;
+                Ok(VmOpReply::VolumeCreated { volume: meta })
+            }
+            VmOp::DeleteVolume { volume_id } => {
+                // Reject if still attached to any local VM.
+                let slots = self.lock_slots();
+                for slot in slots.iter().flatten() {
+                    if slot.volumes.iter().any(|a| a.volume_id == volume_id) {
+                        return Err("vault delete: volume still attached".into());
+                    }
+                }
+                drop(slots);
+                self.vault
+                    .delete(&volume_id)
+                    .map_err(|e| format!("vault delete: {e:?}"))?;
+                Ok(VmOpReply::VolumeDeleted { volume_id })
+            }
+            VmOp::ListVolumes => {
+                Ok(VmOpReply::VolumesListed { volumes: self.vault.list() })
+            }
+            VmOp::AttachVolume { vm_id, volume_id, mount_name } => {
+                if mount_name.len() > celvault::MAX_MOUNT {
+                    return Err("attach: mount_name > MAX_MOUNT".into());
+                }
+                if self.vault.get(&volume_id).is_none() {
+                    return Err("attach: unknown volume".into());
+                }
+                let mut slots = self.lock_slots();
+                let s = Self::slot_mut(&mut slots, vm_id)?;
+                if s.volumes.iter().any(|a| a.volume_id == volume_id) {
+                    return Err("attach: volume already attached".into());
+                }
+                s.volumes.push(VolumeAttachment { volume_id, mount_name });
+                Ok(VmOpReply::Attachments { vm_id, volumes: s.volumes.clone() })
+            }
+            VmOp::DetachVolume { vm_id, volume_id } => {
+                let mut slots = self.lock_slots();
+                let s = Self::slot_mut(&mut slots, vm_id)?;
+                s.volumes.retain(|a| a.volume_id != volume_id);
+                Ok(VmOpReply::Attachments { vm_id, volumes: s.volumes.clone() })
+            }
+        }
+    }
+
+    fn slot_mut<'a>(
+        slots: &'a mut [Option<Slot>; MAX_SLOTS],
+        vm_id: u32,
+    ) -> Result<&'a mut Slot, String> {
+        let i = vm_id as usize;
+        if i >= MAX_SLOTS {
+            return Err("vm id out of range".into());
+        }
+        slots[i].as_mut().ok_or_else(|| "vm not allocated".to_string())
+    }
+
+    fn current_rows(&self, owner: &NodeId) -> Vec<RemoteVm> {
+        self.remember_owner(owner);
+        let slots = self.lock_slots();
+        slots.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| {
+            RemoteVm {
+                owner: owner.clone(),
+                vm_id: i as u32,
+                label: s.label.clone(),
+                state: s.state.into(),
+                last_exit: s.last_exit,
+                epoch: 0,
+                hlc:   0,
+                owner_alive: true,
+                restart_policy: s.restart_policy,
+                volumes: s.volumes.clone(),
+            }
+        })).collect()
+    }
+}
+
+impl VmHost for MemVmHost {
+    fn handle<'a>(&'a self, op: VmOp) -> HostFut<'a, HostResult> {
+        Box::pin(async move { self.apply(op) })
+    }
+
+    fn snapshot<'a>(&'a self, owner: &'a NodeId) -> HostFut<'a, Vec<RemoteVm>> {
+        Box::pin(async move { self.current_rows(owner) })
+    }
+
+    fn attach_preserved<'a>(
+        &'a self,
+        vm_id: u32,
+        attachments: Vec<VolumeAttachment>,
+    ) -> HostFut<'a, Result<(), String>> {
+        Box::pin(async move {
+            let mut slots = self.lock_slots();
+            let s = Self::slot_mut(&mut slots, vm_id)?;
+            s.volumes = attachments;
+            Ok(())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block<F: Future>(f: F) -> F::Output {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(f)
+    }
+
+    #[test]
+    fn create_then_start_then_stop_cycle() {
+        let h = MemVmHost::new();
+        let id = match block(h.handle(VmOp::Create {
+            label: "alpha".into(),
+            restart_policy: RestartPolicy::Always,
+        })).unwrap() {
+            VmOpReply::Created { vm_id } => vm_id,
+            r => panic!("unexpected: {r:?}"),
+        };
+        let rep = block(h.handle(VmOp::Start { vm_id: id })).unwrap();
+        assert!(matches!(rep, VmOpReply::State { state, .. } if state == "halted"));
+        let rows = block(h.snapshot(&NodeId::from("n1")));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "alpha");
+        assert_eq!(rows[0].restart_policy, RestartPolicy::Always);
+    }
+
+    #[test]
+    fn registry_full_is_explicit() {
+        let h = MemVmHost::new();
+        for _ in 0..MAX_SLOTS {
+            block(h.handle(VmOp::Create { label: "x".into(), restart_policy: RestartPolicy::Never })).unwrap();
+        }
+        let r = block(h.handle(VmOp::Create { label: "y".into(), restart_policy: RestartPolicy::Never }));
+        assert!(matches!(r, Err(s) if s.contains("full")));
+    }
+
+    #[test]
+    fn create_attach_detach_volume_round_trip() {
+        let h = MemVmHost::new();
+        // Snapshot first so the host learns its owner id (required
+        // for vault id minting).
+        let _ = block(h.snapshot(&NodeId::from("n1")));
+        let vm = match block(h.handle(VmOp::Create {
+            label: "with-vol".into(),
+            restart_policy: RestartPolicy::Never,
+        })).unwrap() {
+            VmOpReply::Created { vm_id } => vm_id,
+            r => panic!("unexpected: {r:?}"),
+        };
+        let vol = match block(h.handle(VmOp::CreateVolume {
+            name: "data".into(),
+            size_bytes: 16,
+        })).unwrap() {
+            VmOpReply::VolumeCreated { volume } => volume,
+            r => panic!("unexpected: {r:?}"),
+        };
+        assert_eq!(vol.owner, "n1");
+        let att = match block(h.handle(VmOp::AttachVolume {
+            vm_id: vm,
+            volume_id: vol.id.clone(),
+            mount_name: "data0".into(),
+        })).unwrap() {
+            VmOpReply::Attachments { volumes, .. } => volumes,
+            r => panic!("unexpected: {r:?}"),
+        };
+        assert_eq!(att.len(), 1);
+        // Snapshot now must include the attachment so federation
+        // propagates it to peers.
+        let rows = block(h.snapshot(&NodeId::from("n1")));
+        assert_eq!(rows[0].volumes.len(), 1);
+        assert_eq!(rows[0].volumes[0].mount_name, "data0");
+
+        // Cannot delete an attached volume.
+        let r = block(h.handle(VmOp::DeleteVolume { volume_id: vol.id.clone() }));
+        assert!(matches!(r, Err(s) if s.contains("attached")));
+
+        // Detach and confirm we can delete.
+        let _ = block(h.handle(VmOp::DetachVolume {
+            vm_id: vm,
+            volume_id: vol.id.clone(),
+        })).unwrap();
+        let _ = block(h.handle(VmOp::DeleteVolume { volume_id: vol.id })).unwrap();
+    }
+}
