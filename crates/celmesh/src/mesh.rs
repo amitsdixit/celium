@@ -335,6 +335,14 @@ impl Mesh {
         wait: Duration,
     ) -> CelResult<VmOpReply> {
         let self_id = { self.inner.lock().await.config.node_id.clone() };
+        let _span = tracing::info_span!(
+            target: "celmesh::invoke",
+            "invoke",
+            from   = %self_id,
+            to     = %target,
+            op     = crate::capabilities::Capabilities::op_tag(&op),
+        )
+        .entered();
         if &self_id == target {
             // Local fast-path. Skips serialisation but uses the same
             // host trait the wire path uses.

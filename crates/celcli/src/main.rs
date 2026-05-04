@@ -79,6 +79,198 @@ enum ClusterCmd {
     /// Print a single cluster status snapshot — members, VMs,
     /// alive/suspect/dead counters, supervisor flag.
     Status(StartArgs),
+    /// W14: polished VM subcommand tree (create/list/start/stop/
+    /// delete/attach-volume/detach-volume) targeting the cluster.
+    Vm {
+        #[command(subcommand)]
+        op: ClusterVmCmd,
+    },
+    /// W14: polished volume subcommand tree (create/list/delete/
+    /// read/write/snapshot/snapshots/restore) targeting the cluster.
+    Vol {
+        #[command(subcommand)]
+        op: ClusterVolCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ClusterVmCmd {
+    /// Allocate a VM on the target node.
+    Create(VmCreateArgs),
+    /// List federated VMs (cluster-wide view).
+    List(ClusterRpcArgs),
+    /// Start a VM on the target node.
+    Start(VmTargetArgs),
+    /// Stop a VM on the target node.
+    Stop(VmTargetArgs),
+    /// Delete a stopped/halted VM on the target node.
+    Delete(VmTargetArgs),
+    /// Attach a volume to a VM.
+    AttachVolume(VmAttachArgs),
+    /// Detach a volume from a VM.
+    DetachVolume(VmDetachArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum ClusterVolCmd {
+    /// Create a volume on the target node.
+    Create(VolCreateArgs),
+    /// List volumes on the target node.
+    List(VolListArgs),
+    /// Delete a volume on the target node.
+    Delete(VolIdArgs),
+    /// Read bytes from a volume.
+    Read(VolReadArgs),
+    /// Write bytes to a volume.
+    Write(VolWriteArgs),
+    /// Snapshot a volume.
+    Snapshot(VolSnapshotArgs),
+    /// List snapshots, optionally filtered to one volume.
+    Snapshots(VolSnapshotListArgs),
+    /// Restore a snapshot onto its parent volume.
+    Restore(VolSnapshotIdArgs),
+    /// Delete a snapshot.
+    DeleteSnapshot(VolSnapshotIdArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+struct ClusterRpcArgs {
+    #[command(flatten)]
+    common: StartArgs,
+    /// Target node id.
+    #[arg(long)]
+    target: String,
+    /// RPC timeout in milliseconds.
+    #[arg(long, default_value_t = 5_000)]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VmCreateArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    /// Free-form label, ≤ 32 chars.
+    #[arg(long, default_value = "")]
+    label: String,
+    /// Restart policy: `never` or `always`.
+    #[arg(long, default_value = "never")]
+    restart: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VmTargetArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    /// Slot id on the target.
+    #[arg(long)]
+    vm_id: u32,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VmAttachArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    /// Slot id on the target.
+    #[arg(long)]
+    vm_id: u32,
+    /// Volume id (e.g. `n2/v1`).
+    #[arg(long)]
+    volume_id: String,
+    /// Mount-point name inside the guest.
+    #[arg(long)]
+    mount_name: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VmDetachArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    #[arg(long)]
+    vm_id: u32,
+    #[arg(long)]
+    volume_id: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolCreateArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    /// Volume name, ≤ 64 chars.
+    #[arg(long)]
+    name: String,
+    /// Logical size in bytes.
+    #[arg(long)]
+    size: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolListArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolIdArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    #[arg(long)]
+    volume_id: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolReadArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    #[arg(long)]
+    volume_id: String,
+    #[arg(long, default_value_t = 0)]
+    offset: u64,
+    #[arg(long)]
+    len: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolWriteArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    #[arg(long)]
+    volume_id: String,
+    #[arg(long, default_value_t = 0)]
+    offset: u64,
+    /// UTF-8 string payload. For binary data use `--bytes-hex`.
+    #[arg(long, default_value = "")]
+    text: String,
+    /// Hex-encoded byte payload, takes precedence over `--text`.
+    #[arg(long, default_value = "")]
+    bytes_hex: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolSnapshotArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    #[arg(long)]
+    volume_id: String,
+    /// Snapshot label.
+    #[arg(long)]
+    name: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolSnapshotListArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    /// Optional filter — list only snapshots of this volume.
+    #[arg(long, default_value = "")]
+    volume_id: String,
+}
+
+#[derive(Debug, Args, Clone)]
+struct VolSnapshotIdArgs {
+    #[command(flatten)]
+    rpc: ClusterRpcArgs,
+    #[arg(long)]
+    snapshot_id: String,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -284,6 +476,8 @@ async fn run_cluster_cmd(state_path: &std::path::Path, op: ClusterCmd) -> CelRes
         ClusterCmd::InvokePath(args) => cluster_invoke_path(args).await,
         ClusterCmd::Recover(args) => cluster_recover(args).await,
         ClusterCmd::Status(args)  => cluster_status(args).await,
+        ClusterCmd::Vm  { op }    => cluster_vm_cmd(op).await,
+        ClusterCmd::Vol { op }    => cluster_vol_cmd(op).await,
     }
 }
 
@@ -591,6 +785,327 @@ async fn cluster_status(args: StartArgs) -> CelResult<()> {
     Ok(())
 }
 
+// -- Week-14 --------------------------------------------------------------
+
+/// Build a transient mesh, install a local `MemVmHost`, let gossip
+/// settle, and run `body` against the connected mesh. Tears the mesh
+/// down on exit.
+async fn with_transient_mesh<F, Fut, T>(rpc: ClusterRpcArgs, body: F) -> CelResult<T>
+where
+    F: FnOnce(Mesh) -> Fut,
+    Fut: std::future::Future<Output = CelResult<T>>,
+{
+    let mut owner_id = String::new();
+    let mesh = build_mesh(&rpc.common, &mut owner_id).await?;
+    let host: Arc<dyn VmHost> = Arc::new(MemVmHost::new());
+    mesh.set_host(host).await;
+    tokio::time::sleep(Duration::from_secs(rpc.common.settle.max(1))).await;
+    let r = body(mesh.clone()).await;
+    let _ = mesh.shutdown().await;
+    r
+}
+
+fn parse_restart(s: &str) -> CelResult<RestartPolicy> {
+    match s {
+        "always" => Ok(RestartPolicy::Always),
+        "never"  => Ok(RestartPolicy::Never),
+        _        => Err(CelError::Invalid("restart: expected 'never' or 'always'")),
+    }
+}
+
+fn decode_hex(s: &str) -> CelResult<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return Err(CelError::Invalid("bytes-hex: odd length"));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = hex_nib(bytes[i])?;
+        let lo = hex_nib(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn hex_nib(b: u8) -> CelResult<u8> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(CelError::Invalid("bytes-hex: non-hex char")),
+    }
+}
+
+fn render_bytes(bytes: &[u8]) -> String {
+    // Print as quoted text if printable ASCII, else hex.
+    if bytes.iter().all(|b| (0x20..0x7f).contains(b) || *b == b'\n' || *b == b'\t') {
+        match std::str::from_utf8(bytes) {
+            Ok(s)  => format!("{s:?}"),
+            Err(_) => bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        }
+    } else {
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    }
+}
+
+async fn cluster_vm_cmd(op: ClusterVmCmd) -> CelResult<()> {
+    match op {
+        ClusterVmCmd::Create(args) => {
+            let restart = parse_restart(&args.restart)?;
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::Create { label: args.label.clone(), restart_policy: restart },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::Created { vm_id } = reply {
+                    println!("created vm {target}/{vm_id} (path /cluster/{target}/vms/{vm_id})");
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVmCmd::List(rpc) => {
+            with_transient_mesh(rpc.clone(), |mesh| async move {
+                let target = NodeId(rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target, VmOp::List, Duration::from_millis(rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::Listed { rows } = reply {
+                    println!("{:<28}  {:<8}  {}", "path", "state", "label");
+                    for r in rows {
+                        println!("{:<28}  {:<8}  {}", r.path(), r.state, r.label);
+                    }
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVmCmd::Start(args)  => simple_vm_op(&args, |id| VmOp::Start  { vm_id: id }).await,
+        ClusterVmCmd::Stop(args)   => simple_vm_op(&args, |id| VmOp::Stop   { vm_id: id }).await,
+        ClusterVmCmd::Delete(args) => simple_vm_op(&args, |id| VmOp::Delete { vm_id: id }).await,
+        ClusterVmCmd::AttachVolume(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::AttachVolume {
+                        vm_id: args.vm_id,
+                        volume_id: celmesh::VolumeId(args.volume_id.clone()),
+                        mount_name: args.mount_name.clone(),
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::Attachments { vm_id, volumes } = reply {
+                    println!("vm {target}/{vm_id} now has {} attachment(s)", volumes.len());
+                    for a in volumes {
+                        println!("  {} -> {}", a.mount_name, a.volume_id);
+                    }
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVmCmd::DetachVolume(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::DetachVolume {
+                        vm_id: args.vm_id,
+                        volume_id: celmesh::VolumeId(args.volume_id.clone()),
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::Attachments { vm_id, volumes } = reply {
+                    println!("vm {target}/{vm_id} now has {} attachment(s)", volumes.len());
+                }
+                Ok(())
+            }).await
+        }
+    }
+}
+
+async fn simple_vm_op<F>(args: &VmTargetArgs, mk: F) -> CelResult<()>
+where
+    F: FnOnce(u32) -> VmOp,
+{
+    let op = mk(args.vm_id);
+    let target = NodeId(args.rpc.target.clone());
+    let timeout_ms = args.rpc.timeout_ms;
+    with_transient_mesh(args.rpc.clone(), |mesh| async move {
+        let reply = mesh.invoke(&target, op, Duration::from_millis(timeout_ms)).await?;
+        match reply {
+            VmOpReply::State { vm_id, state }  => println!("vm {target}/{vm_id} state={state}"),
+            VmOpReply::Deleted { vm_id }       => println!("deleted vm {target}/{vm_id}"),
+            other                              => println!("{other:?}"),
+        }
+        Ok(())
+    }).await
+}
+
+async fn cluster_vol_cmd(op: ClusterVolCmd) -> CelResult<()> {
+    match op {
+        ClusterVolCmd::Create(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::CreateVolume { name: args.name.clone(), size_bytes: args.size },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::VolumeCreated { volume } = reply {
+                    println!("created volume {} (size={} owner={} name={})",
+                             volume.id, volume.size_bytes, volume.owner, volume.name);
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::List(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target, VmOp::ListVolumes, Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::VolumesListed { volumes } = reply {
+                    println!("{:<24}  {:>10}  {:<8}  {}", "id", "size", "owner", "name");
+                    for v in volumes {
+                        println!("{:<24}  {:>10}  {:<8}  {}", v.id, v.size_bytes, v.owner, v.name);
+                    }
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::Delete(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::DeleteVolume { volume_id: celmesh::VolumeId(args.volume_id.clone()) },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::VolumeDeleted { volume_id } = reply {
+                    println!("deleted {volume_id}");
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::Read(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::ReadVolume {
+                        volume_id: celmesh::VolumeId(args.volume_id.clone()),
+                        offset: args.offset, len: args.len,
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::VolumeData { volume_id, bytes } = reply {
+                    println!("{volume_id} @ {} ({} bytes): {}",
+                             args.offset, bytes.len(), render_bytes(&bytes));
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::Write(args) => {
+            let bytes = if !args.bytes_hex.is_empty() {
+                decode_hex(&args.bytes_hex)?
+            } else {
+                args.text.as_bytes().to_vec()
+            };
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::WriteVolume {
+                        volume_id: celmesh::VolumeId(args.volume_id.clone()),
+                        offset: args.offset, bytes,
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::VolumeWritten { volume_id, bytes_written } = reply {
+                    println!("wrote {bytes_written} bytes to {volume_id} @ {}", args.offset);
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::Snapshot(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::CreateSnapshot {
+                        volume_id: celmesh::VolumeId(args.volume_id.clone()),
+                        name: args.name.clone(),
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::SnapshotCreated { snapshot } = reply {
+                    println!("created snapshot {} of {} ({} bytes)",
+                             snapshot.id, snapshot.volume, snapshot.size_bytes);
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::Snapshots(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let filter = if args.volume_id.is_empty() {
+                    None
+                } else {
+                    Some(celmesh::VolumeId(args.volume_id.clone()))
+                };
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::ListSnapshots { volume_id: filter },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::SnapshotsListed { snapshots } = reply {
+                    println!("{:<28}  {:<18}  {:>10}  {}", "id", "volume", "size", "name");
+                    for s in snapshots {
+                        println!("{:<28}  {:<18}  {:>10}  {}",
+                                 s.id, s.volume, s.size_bytes, s.name);
+                    }
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::Restore(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::RestoreSnapshot {
+                        snapshot_id: celmesh::SnapshotId(args.snapshot_id.clone()),
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::SnapshotRestored { snapshot_id } = reply {
+                    println!("restored {snapshot_id}");
+                }
+                Ok(())
+            }).await
+        }
+        ClusterVolCmd::DeleteSnapshot(args) => {
+            with_transient_mesh(args.rpc.clone(), |mesh| async move {
+                let target = NodeId(args.rpc.target.clone());
+                let reply = mesh.invoke(
+                    &target,
+                    VmOp::DeleteSnapshot {
+                        snapshot_id: celmesh::SnapshotId(args.snapshot_id.clone()),
+                    },
+                    Duration::from_millis(args.rpc.timeout_ms),
+                ).await?;
+                if let VmOpReply::SnapshotDeleted { snapshot_id } = reply {
+                    println!("deleted {snapshot_id}");
+                }
+                Ok(())
+            }).await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,3 +1151,4 @@ mod tests {
         assert!(r.is_err());
     }
 }
+

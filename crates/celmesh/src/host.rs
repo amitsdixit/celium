@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use celvault::{MemVolumeStore, VolumeAttachment, VolumeStore};
 
+use crate::capabilities::Capabilities;
 use crate::federation::{RemoteVm, RestartPolicy};
 use crate::membership::NodeId;
 use crate::proto::{VmOp, VmOpReply};
@@ -91,6 +92,9 @@ pub struct MemVmHost {
     /// time `snapshot` runs so `MemVolumeStore` ids match the
     /// convention `<node>/v<n>`.
     owner: Mutex<Option<String>>,
+    /// W14: capabilities granted to peers invoking this host.
+    /// Default is [`Capabilities::ALL`] for back-compat.
+    caps: Capabilities,
 }
 
 impl Default for MemVmHost {
@@ -112,8 +116,21 @@ impl MemVmHost {
             slots: Mutex::new(Default::default()),
             vault,
             owner: Mutex::new(None),
+            caps:  Capabilities::ALL,
         }
     }
+
+    /// W14: replace the capability set granted to peers. Returns
+    /// `self` so it composes with [`Self::new`] / [`Self::with_vault`].
+    #[must_use]
+    pub fn with_caps(mut self, caps: Capabilities) -> Self {
+        self.caps = caps;
+        self
+    }
+
+    /// Borrow the capability set. Useful for tests / status RPCs.
+    #[must_use]
+    pub fn caps(&self) -> Capabilities { self.caps }
 
     /// Borrow the volume store. Useful for tests.
     #[must_use]
@@ -150,6 +167,13 @@ impl MemVmHost {
     }
 
     fn apply(&self, op: VmOp) -> HostResult {
+        let tag = Capabilities::op_tag(&op);
+        let needed = Capabilities::required(&op);
+        if !self.caps.contains(needed) {
+            tracing::warn!(target: "celmesh::host", op = tag, "capability denied");
+            return Err(format!("capability denied: {tag}"));
+        }
+        tracing::debug!(target: "celmesh::host", op = tag, "apply");
         match op {
             // -- VM lifecycle ---------------------------------------------
             VmOp::Create { label, restart_policy } => {

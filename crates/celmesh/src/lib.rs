@@ -31,6 +31,9 @@ pub mod membership;
 pub mod mesh;
 pub mod proto;
 pub mod transport;
+pub mod capabilities;
+
+pub use capabilities::Capabilities;
 
 pub use federation::{NamespaceFederation, RemoteVm, RestartPolicy};
 pub use host::{MemVmHost, VmHost};
