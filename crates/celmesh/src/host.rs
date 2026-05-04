@@ -61,6 +61,11 @@ pub trait VmHost: Send + Sync {
 /// Maximum slots — must agree with `celcli::vm::MAX_VMS`.
 const MAX_SLOTS: usize = 4;
 
+/// Per-call cap on `ReadVolume` / `WriteVolume` payloads. Chosen so a
+/// single op fits inside the protocol's 64 KiB frame budget after
+/// JSON + base64 framing overhead.
+const MAX_VOLUME_IO_BYTES: usize = 32 * 1024;
+
 #[derive(Debug, Clone)]
 struct Slot {
     label: String,
@@ -247,6 +252,48 @@ impl MemVmHost {
                 let s = Self::slot_mut(&mut slots, vm_id)?;
                 s.volumes.retain(|a| a.volume_id != volume_id);
                 Ok(VmOpReply::Attachments { vm_id, volumes: s.volumes.clone() })
+            }
+            // -- Week-13 volume IO + snapshots ----------------------------
+            VmOp::ReadVolume { volume_id, offset, len } => {
+                if len > MAX_VOLUME_IO_BYTES as u64 {
+                    return Err("volume io: chunk too large".into());
+                }
+                let bytes = self.vault
+                    .read(&volume_id, offset, len as usize)
+                    .map_err(|e| format!("vault read: {e:?}"))?;
+                Ok(VmOpReply::VolumeData { volume_id, bytes })
+            }
+            VmOp::WriteVolume { volume_id, offset, bytes } => {
+                if bytes.len() > MAX_VOLUME_IO_BYTES {
+                    return Err("volume io: chunk too large".into());
+                }
+                let written = bytes.len() as u64;
+                self.vault
+                    .write(&volume_id, offset, &bytes)
+                    .map_err(|e| format!("vault write: {e:?}"))?;
+                Ok(VmOpReply::VolumeWritten { volume_id, bytes_written: written })
+            }
+            VmOp::CreateSnapshot { volume_id, name } => {
+                let snap = self.vault
+                    .create_snapshot(&volume_id, &name)
+                    .map_err(|e| format!("vault snapshot: {e:?}"))?;
+                Ok(VmOpReply::SnapshotCreated { snapshot: snap })
+            }
+            VmOp::ListSnapshots { volume_id } => {
+                let snaps = self.vault.list_snapshots(volume_id.as_ref());
+                Ok(VmOpReply::SnapshotsListed { snapshots: snaps })
+            }
+            VmOp::DeleteSnapshot { snapshot_id } => {
+                self.vault
+                    .delete_snapshot(&snapshot_id)
+                    .map_err(|e| format!("vault snapshot delete: {e:?}"))?;
+                Ok(VmOpReply::SnapshotDeleted { snapshot_id })
+            }
+            VmOp::RestoreSnapshot { snapshot_id } => {
+                self.vault
+                    .restore_snapshot(&snapshot_id)
+                    .map_err(|e| format!("vault snapshot restore: {e:?}"))?;
+                Ok(VmOpReply::SnapshotRestored { snapshot_id })
             }
         }
     }

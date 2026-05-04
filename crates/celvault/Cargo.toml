@@ -9,6 +9,7 @@ repository.workspace   = true
 description  = "Celium secure storage and networking (placeholder)."
 
 [dependencies]
-celcommon = { workspace = true }
-tracing   = { workspace = true }
-serde     = { workspace = true, features = ["derive"] }
+celcommon  = { workspace = true }
+tracing    = { workspace = true }
+serde      = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

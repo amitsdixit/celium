@@ -433,8 +433,25 @@ async fn cluster_invoke(args: InvokeArgs) -> CelResult<()> {
             vm_id: args.vm_id,
             volume_id: celmesh::VolumeId(args.volume_id.clone()),
         },
+        "create-snapshot" => VmOp::CreateSnapshot {
+            volume_id: celmesh::VolumeId(args.volume_id.clone()),
+            name: args.label.clone(),
+        },
+        "list-snapshots" => VmOp::ListSnapshots {
+            volume_id: if args.volume_id.is_empty() {
+                None
+            } else {
+                Some(celmesh::VolumeId(args.volume_id.clone()))
+            },
+        },
+        "delete-snapshot" => VmOp::DeleteSnapshot {
+            snapshot_id: celmesh::SnapshotId(args.volume_id.clone()),
+        },
+        "restore-snapshot" => VmOp::RestoreSnapshot {
+            snapshot_id: celmesh::SnapshotId(args.volume_id.clone()),
+        },
         _ => return Err(CelError::Invalid(
-            "op: create|start|stop|delete|list|create-volume|delete-volume|list-volumes|attach-volume|detach-volume",
+            "op: create|start|stop|delete|list|create-volume|delete-volume|list-volumes|attach-volume|detach-volume|create-snapshot|list-snapshots|delete-snapshot|restore-snapshot",
         )),
     };
 
@@ -470,6 +487,23 @@ async fn cluster_invoke(args: InvokeArgs) -> CelResult<()> {
                 println!("  {} -> {}", a.mount_name, a.volume_id);
             }
         }
+        VmOpReply::VolumeData { volume_id, bytes } =>
+            println!("read {} bytes from {volume_id}", bytes.len()),
+        VmOpReply::VolumeWritten { volume_id, bytes_written } =>
+            println!("wrote {bytes_written} bytes to {volume_id}"),
+        VmOpReply::SnapshotCreated { snapshot } =>
+            println!("created snapshot {} ({} bytes) of {}",
+                     snapshot.id, snapshot.size_bytes, snapshot.volume),
+        VmOpReply::SnapshotsListed { snapshots } => {
+            println!("{:<28}  {:<18}  {:<10}  {}", "id", "volume", "size", "name");
+            for s in snapshots {
+                println!("{:<28}  {:<18}  {:<10}  {}", s.id, s.volume, s.size_bytes, s.name);
+            }
+        }
+        VmOpReply::SnapshotDeleted { snapshot_id } =>
+            println!("deleted snapshot {snapshot_id}"),
+        VmOpReply::SnapshotRestored { snapshot_id } =>
+            println!("restored snapshot {snapshot_id}"),
     }
     let _ = mesh.shutdown().await;
     Ok(())

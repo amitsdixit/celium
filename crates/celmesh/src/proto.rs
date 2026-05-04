@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::federation::RemoteVm;
 use crate::membership::NodeInfo;
-pub use celvault::{VolumeAttachment, VolumeId, VolumeMeta};
+pub use celvault::{SnapshotId, SnapshotMeta, VolumeAttachment, VolumeId, VolumeMeta};
 /// Protocol version. Bump on incompatible wire changes — receivers
 /// drop frames whose `version` they do not recognise.
 pub const PROTO_VERSION: u32 = 1;
@@ -151,6 +151,47 @@ pub enum VmOp {
         /// Volume to detach.
         volume_id: VolumeId,
     },
+    /// Week-13: random-access read against a volume.
+    ReadVolume {
+        /// Volume to read from.
+        volume_id: VolumeId,
+        /// Byte offset.
+        offset: u64,
+        /// Number of bytes to read. Capped server-side.
+        len: u64,
+    },
+    /// Week-13: random-access write to a volume.
+    WriteVolume {
+        /// Volume to write to.
+        volume_id: VolumeId,
+        /// Byte offset.
+        offset: u64,
+        /// Bytes to write. Capped server-side.
+        bytes: Vec<u8>,
+    },
+    /// Week-13: take a snapshot of a volume.
+    CreateSnapshot {
+        /// Volume to snapshot.
+        volume_id: VolumeId,
+        /// Free-form snapshot label.
+        name: String,
+    },
+    /// Week-13: list snapshots, optionally filtered to one volume.
+    ListSnapshots {
+        /// Volume filter; `None` lists every snapshot.
+        #[serde(default)]
+        volume_id: Option<VolumeId>,
+    },
+    /// Week-13: delete a snapshot.
+    DeleteSnapshot {
+        /// Snapshot to delete.
+        snapshot_id: SnapshotId,
+    },
+    /// Week-13: restore a snapshot back onto its parent volume.
+    RestoreSnapshot {
+        /// Snapshot to restore.
+        snapshot_id: SnapshotId,
+    },
 }
 
 /// Reply to a [`VmOp`]. Tagged so the wire form is human-readable.
@@ -201,6 +242,40 @@ pub enum VmOpReply {
         vm_id: u32,
         /// Current attachments.
         volumes: Vec<VolumeAttachment>,
+    },
+    /// Week-13: returned for `ReadVolume`.
+    VolumeData {
+        /// Volume the bytes were read from.
+        volume_id: VolumeId,
+        /// Bytes read.
+        bytes: Vec<u8>,
+    },
+    /// Week-13: returned for `WriteVolume`.
+    VolumeWritten {
+        /// Volume that was written to.
+        volume_id: VolumeId,
+        /// Number of bytes written.
+        bytes_written: u64,
+    },
+    /// Week-13: returned for `CreateSnapshot`.
+    SnapshotCreated {
+        /// Newly-created snapshot.
+        snapshot: SnapshotMeta,
+    },
+    /// Week-13: returned for `ListSnapshots`.
+    SnapshotsListed {
+        /// Snapshots matching the requested filter.
+        snapshots: Vec<SnapshotMeta>,
+    },
+    /// Week-13: returned for `DeleteSnapshot`.
+    SnapshotDeleted {
+        /// Snapshot id that was removed.
+        snapshot_id: SnapshotId,
+    },
+    /// Week-13: returned for `RestoreSnapshot`.
+    SnapshotRestored {
+        /// Snapshot id that was restored.
+        snapshot_id: SnapshotId,
     },
 }
 

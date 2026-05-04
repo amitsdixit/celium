@@ -546,7 +546,13 @@ impl Mesh {
             | VmOp::List
             | VmOp::CreateVolume { .. }
             | VmOp::DeleteVolume { .. }
-            | VmOp::ListVolumes => {}
+            | VmOp::ListVolumes
+            | VmOp::ReadVolume { .. }
+            | VmOp::WriteVolume { .. }
+            | VmOp::CreateSnapshot { .. }
+            | VmOp::ListSnapshots { .. }
+            | VmOp::DeleteSnapshot { .. }
+            | VmOp::RestoreSnapshot { .. } => {}
         }
         self.invoke(&owner, op, wait).await
     }

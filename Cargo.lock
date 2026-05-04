@@ -125,6 +125,7 @@ version = "0.1.0"
 dependencies = [
  "celcommon",
  "serde",
+ "serde_json",
  "tracing",
 ]
 

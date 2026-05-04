@@ -42,7 +42,8 @@ pub use transport::{MemTransport, MemTransportFactory, Transport, UdpTransport};
 // Re-export celvault's volume surface so downstream crates only need
 // to depend on celmesh.
 pub use celvault::{
-    MemVolumeStore, VolumeAttachment, VolumeId, VolumeMeta, VolumeStore,
+    FileVolumeStore, MemVolumeStore, SnapshotId, SnapshotMeta,
+    VolumeAttachment, VolumeId, VolumeMeta, VolumeStore,
 };
 
 use celcommon::CelResult;
