@@ -139,6 +139,15 @@ pub fn write_host_state(host: &HostState, host_rip: u64, host_rsp: u64) -> Hyper
     // Selector fields require TI=0, RPL=0 (SDM §26.2.3).
     const SEL_MASK: u16 = 0xFFF8;
 
+    crate::logger::log_kv("host_cs", u64::from(host.cs));
+    crate::logger::log_kv("host_ss", u64::from(host.ss));
+    crate::logger::log_kv("host_ds", u64::from(host.ds));
+    crate::logger::log_kv("host_tr", u64::from(host.tr));
+    crate::logger::log_kv("host_cr0", host.cr0);
+    crate::logger::log_kv("host_cr4", host.cr4);
+    crate::logger::log_kv("host_rip", host_rip);
+    crate::logger::log_kv("host_rsp", host_rsp);
+
     vmcs::vmwrite(f::HOST_CR0, host.cr0)?;
     vmcs::vmwrite(f::HOST_CR3, host.cr3)?;
     vmcs::vmwrite(f::HOST_CR4, host.cr4)?;

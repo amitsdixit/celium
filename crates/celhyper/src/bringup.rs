@@ -52,6 +52,14 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
     manager::init_runtime()?;
     logger::log("celhyper: vmx runtime initialised");
 
+    // 2a. Replace the UEFI GDT with our own (which carries a TSS).
+    //     SDM §26.2.3 forbids HOST_TR=0 at VM entry; UEFI's GDT has no
+    //     TSS slot and `str` returns the null selector without this.
+    logger::log("celhyper: installing host gdt+tss...");
+    // SAFETY: single-threaded boot path, CPL 0, called once.
+    unsafe { crate::host_gdt::install(); }
+    logger::log("celhyper: host gdt+tss installed");
+
     // 3. Create two VMs.
     let id_a = ns.create_vm(&CreateVmRequest::hello())?;
     logger::log_kv("vm_a_id", u64::from(id_a.0));

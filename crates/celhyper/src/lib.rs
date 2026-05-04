@@ -41,6 +41,8 @@ pub mod vmx;
 #[cfg(not(test))]
 pub mod bringup;
 #[cfg(not(test))]
+pub mod host_gdt;
+#[cfg(not(test))]
 pub mod manager;
 
 pub use error::{HyperError, HyperResult};

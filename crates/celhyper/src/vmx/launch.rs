@@ -11,6 +11,43 @@ use crate::mm::{Ept, EptFlags, FrameProvider, PhysAddr};
 use crate::vmx::fields as f;
 use crate::vmx::vmcs;
 
+// IA32_VMX_* capability MSRs used to rebase control-field reserved bits.
+// SDM Vol 3 §A.3, §A.4. For each MSR: low 32 bits = "allowed-0" (must be 1),
+// high 32 bits = "allowed-1" (may be 1).
+const IA32_VMX_BASIC:               u32 = 0x480;
+const IA32_VMX_PINBASED_CTLS:       u32 = 0x481;
+const IA32_VMX_PROCBASED_CTLS:      u32 = 0x482;
+const IA32_VMX_EXIT_CTLS:           u32 = 0x483;
+const IA32_VMX_ENTRY_CTLS:          u32 = 0x484;
+const IA32_VMX_PROCBASED_CTLS2:     u32 = 0x48B;
+const IA32_VMX_TRUE_PINBASED_CTLS:  u32 = 0x48D;
+const IA32_VMX_TRUE_PROCBASED_CTLS: u32 = 0x48E;
+const IA32_VMX_TRUE_EXIT_CTLS:      u32 = 0x48F;
+const IA32_VMX_TRUE_ENTRY_CTLS:     u32 = 0x490;
+
+/// Apply allowed-0/allowed-1 constraints from `msr` to `desired`.
+///
+/// SDM §A.3.1: bits set in the low 32 bits MUST be 1 in the VMCS field;
+/// bits clear in the high 32 bits MUST be 0. The result is `(desired |
+/// allowed_0) & allowed_1`. Bits required to be 1 always win, even if
+/// the caller passed them as 0.
+fn rebase_ctl(desired: u32, msr_addr: u32) -> u32 {
+    // SAFETY: each MSR address above is architecturally readable when
+    // CPUID.1:ECX[5] (VMX) is set; manager::init_runtime gates on that.
+    let v = unsafe { crate::arch::cpu::rdmsr(msr_addr) };
+    let allowed_0 = v as u32;          // must-be-1 mask
+    let allowed_1 = (v >> 32) as u32;  // may-be-1 mask
+    (desired | allowed_0) & allowed_1
+}
+
+/// Pick `IA32_VMX_TRUE_*_CTLS` if the CPU advertises them via
+/// `IA32_VMX_BASIC[55]`, otherwise fall back to the legacy MSR.
+fn ctl_msr(true_msr: u32, legacy_msr: u32) -> u32 {
+    // SAFETY: same as `rebase_ctl`.
+    let basic = unsafe { crate::arch::cpu::rdmsr(IA32_VMX_BASIC) };
+    if basic & (1u64 << 55) != 0 { true_msr } else { legacy_msr }
+}
+
 /// Inputs handed to the launcher. Owning it as a struct keeps the (long)
 /// list of physical addresses and selectors in one place rather than
 /// threading them through a 12-arg function.
@@ -37,20 +74,34 @@ pub struct LaunchPlan {
 /// [`crate::vmx::host_state::write_host_state`].
 pub fn write_vmcs(plan: &LaunchPlan) -> HyperResult<()> {
     // ---- Controls ---------------------------------------------------------
-    // We use unrestricted-guest + EPT so the blob can run from real-mode-style
-    // selectors without us having to construct a full GDT for the guest.
-    vmcs::vmwrite(f::PIN_BASED_VM_EXEC_CTL, 0)?;
-    vmcs::vmwrite(
-        f::CPU_BASED_VM_EXEC_CTL,
-        u64::from(f::CPUBASED_HLT_EXITING | f::CPUBASED_ACTIVATE_SECONDARY),
-    )?;
-    vmcs::vmwrite(
-        f::SECONDARY_VM_EXEC_CTL,
-        u64::from(f::SECONDARY_ENABLE_EPT | f::SECONDARY_UNRESTRICTED_GUEST),
-    )?;
+    // Each control field's must-be-1 / may-be-1 reserved bits are encoded
+    // in IA32_VMX_*_CTLS (or _TRUE_* on modern CPUs that advertise
+    // IA32_VMX_BASIC[55]). Writing a raw value without rebasing through
+    // those masks fails entry check #7 ("invalid control field(s)").
+    let pin_msr   = ctl_msr(IA32_VMX_TRUE_PINBASED_CTLS,  IA32_VMX_PINBASED_CTLS);
+    let proc_msr  = ctl_msr(IA32_VMX_TRUE_PROCBASED_CTLS, IA32_VMX_PROCBASED_CTLS);
+    let exit_msr  = ctl_msr(IA32_VMX_TRUE_EXIT_CTLS,      IA32_VMX_EXIT_CTLS);
+    let entry_msr = ctl_msr(IA32_VMX_TRUE_ENTRY_CTLS,     IA32_VMX_ENTRY_CTLS);
+
+    let pin_ctl   = rebase_ctl(0,                                                   pin_msr);
+    let proc_ctl  = rebase_ctl(f::CPUBASED_HLT_EXITING | f::CPUBASED_ACTIVATE_SECONDARY, proc_msr);
+    let sec_ctl   = rebase_ctl(f::SECONDARY_ENABLE_EPT | f::SECONDARY_UNRESTRICTED_GUEST,
+                               IA32_VMX_PROCBASED_CTLS2);
+    let exit_ctl  = rebase_ctl(f::VMEXIT_HOST_ADDR_SPACE_SIZE,                      exit_msr);
+    let entry_ctl = rebase_ctl(f::VMENTRY_IA32E_MODE_GUEST,                         entry_msr);
+
+    crate::logger::log_kv("pin_ctl",   u64::from(pin_ctl));
+    crate::logger::log_kv("proc_ctl",  u64::from(proc_ctl));
+    crate::logger::log_kv("sec_ctl",   u64::from(sec_ctl));
+    crate::logger::log_kv("exit_ctl",  u64::from(exit_ctl));
+    crate::logger::log_kv("entry_ctl", u64::from(entry_ctl));
+
+    vmcs::vmwrite(f::PIN_BASED_VM_EXEC_CTL, u64::from(pin_ctl))?;
+    vmcs::vmwrite(f::CPU_BASED_VM_EXEC_CTL, u64::from(proc_ctl))?;
+    vmcs::vmwrite(f::SECONDARY_VM_EXEC_CTL, u64::from(sec_ctl))?;
     vmcs::vmwrite(f::EXCEPTION_BITMAP, 0)?;
-    vmcs::vmwrite(f::VM_EXIT_CTLS, u64::from(f::VMEXIT_HOST_ADDR_SPACE_SIZE))?;
-    vmcs::vmwrite(f::VM_ENTRY_CTLS, u64::from(f::VMENTRY_IA32E_MODE_GUEST))?;
+    vmcs::vmwrite(f::VM_EXIT_CTLS,  u64::from(exit_ctl))?;
+    vmcs::vmwrite(f::VM_ENTRY_CTLS, u64::from(entry_ctl))?;
     vmcs::vmwrite(f::EPT_POINTER, plan.eptp)?;
 
     // ---- Guest state (long mode, flat) -----------------------------------
@@ -101,15 +152,12 @@ pub fn vmlaunch() -> HyperResult<()> {
         );
     }
     if rflags & (1 << 0) != 0 {
+        crate::logger::log("vmlaunch: VMfailInvalid (no current VMCS)");
         return Err(HyperError::Hardware("vmlaunch: VMfailInvalid"));
     }
     if rflags & (1 << 6) != 0 {
-        // Try to surface the precise instruction-error code, but don't
-        // fail the fault handling itself if vmread errors.
         if let Ok(code) = vmcs::vmread(f::VM_INSTRUCTION_ERROR) {
-            // Code is logged through the serial logger by the caller; we
-            // only carry the coarse variant in the error value.
-            let _ = code;
+            crate::logger::log_kv("vmlaunch_instruction_error", code);
         }
         return Err(HyperError::Hardware("vmlaunch: VMfailValid"));
     }
