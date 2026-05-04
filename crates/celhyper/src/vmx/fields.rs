@@ -36,6 +36,11 @@ pub const VM_EXIT_MSR_LOAD_ADDR:    u32 = 0x0000_2008;
 pub const VM_ENTRY_MSR_LOAD_ADDR:   u32 = 0x0000_200A;
 pub const EPT_POINTER:              u32 = 0x0000_201A;
 
+// ---------- 64-bit guest-state fields --------------------------------------
+pub const VMCS_LINK_POINTER:        u32 = 0x0000_2800;
+pub const GUEST_IA32_DEBUGCTL:      u32 = 0x0000_2802;
+pub const GUEST_IA32_EFER:          u32 = 0x0000_2806;
+
 // ---------- 32-bit control fields ------------------------------------------
 pub const PIN_BASED_VM_EXEC_CTL:    u32 = 0x0000_4000;
 pub const CPU_BASED_VM_EXEC_CTL:    u32 = 0x0000_4002;
@@ -48,13 +53,50 @@ pub const SECONDARY_VM_EXEC_CTL:    u32 = 0x0000_401E;
 pub const VM_INSTRUCTION_ERROR:     u32 = 0x0000_4400;
 pub const EXIT_REASON:              u32 = 0x0000_4402;
 
+// ---------- 32-bit guest-state fields --------------------------------------
+pub const GUEST_ES_LIMIT:           u32 = 0x0000_4800;
+pub const GUEST_CS_LIMIT:           u32 = 0x0000_4802;
+pub const GUEST_SS_LIMIT:           u32 = 0x0000_4804;
+pub const GUEST_DS_LIMIT:           u32 = 0x0000_4806;
+pub const GUEST_FS_LIMIT:           u32 = 0x0000_4808;
+pub const GUEST_GS_LIMIT:           u32 = 0x0000_480A;
+pub const GUEST_LDTR_LIMIT:         u32 = 0x0000_480C;
+pub const GUEST_TR_LIMIT:           u32 = 0x0000_480E;
+pub const GUEST_GDTR_LIMIT:         u32 = 0x0000_4810;
+pub const GUEST_IDTR_LIMIT:         u32 = 0x0000_4812;
+pub const GUEST_ES_AR:              u32 = 0x0000_4814;
+pub const GUEST_CS_AR:              u32 = 0x0000_4816;
+pub const GUEST_SS_AR:              u32 = 0x0000_4818;
+pub const GUEST_DS_AR:              u32 = 0x0000_481A;
+pub const GUEST_FS_AR:              u32 = 0x0000_481C;
+pub const GUEST_GS_AR:              u32 = 0x0000_481E;
+pub const GUEST_LDTR_AR:            u32 = 0x0000_4820;
+pub const GUEST_TR_AR:              u32 = 0x0000_4822;
+pub const GUEST_INTERRUPTIBILITY:   u32 = 0x0000_4824;
+pub const GUEST_ACTIVITY_STATE:     u32 = 0x0000_4826;
+pub const GUEST_SYSENTER_CS:        u32 = 0x0000_482A;
+
 // ---------- Natural-width guest-state fields -------------------------------
 pub const GUEST_CR0:                u32 = 0x0000_6800;
 pub const GUEST_CR3:                u32 = 0x0000_6802;
 pub const GUEST_CR4:                u32 = 0x0000_6804;
+pub const GUEST_ES_BASE:            u32 = 0x0000_6806;
+pub const GUEST_CS_BASE:            u32 = 0x0000_6808;
+pub const GUEST_SS_BASE:            u32 = 0x0000_680A;
+pub const GUEST_DS_BASE:            u32 = 0x0000_680C;
+pub const GUEST_FS_BASE:            u32 = 0x0000_680E;
+pub const GUEST_GS_BASE:            u32 = 0x0000_6810;
+pub const GUEST_LDTR_BASE:          u32 = 0x0000_6812;
+pub const GUEST_TR_BASE:            u32 = 0x0000_6814;
+pub const GUEST_GDTR_BASE:          u32 = 0x0000_6816;
+pub const GUEST_IDTR_BASE:          u32 = 0x0000_6818;
+pub const GUEST_DR7:                u32 = 0x0000_681A;
 pub const GUEST_RSP:                u32 = 0x0000_681C;
 pub const GUEST_RIP:                u32 = 0x0000_681E;
 pub const GUEST_RFLAGS:             u32 = 0x0000_6820;
+pub const GUEST_PENDING_DBG_EXC:    u32 = 0x0000_6822;
+pub const GUEST_SYSENTER_ESP:       u32 = 0x0000_6824;
+pub const GUEST_SYSENTER_EIP:       u32 = 0x0000_6826;
 
 // ---------- Natural-width host-state fields --------------------------------
 pub const HOST_CR0:                 u32 = 0x0000_6C00;

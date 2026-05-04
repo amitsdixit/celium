@@ -24,6 +24,12 @@ const IA32_VMX_TRUE_PINBASED_CTLS:  u32 = 0x48D;
 const IA32_VMX_TRUE_PROCBASED_CTLS: u32 = 0x48E;
 const IA32_VMX_TRUE_EXIT_CTLS:      u32 = 0x48F;
 const IA32_VMX_TRUE_ENTRY_CTLS:     u32 = 0x490;
+// Fixed-bit MSRs for CR0/CR4 (SDM §A.7, §A.8). Same allowed-0/allowed-1
+// semantics: low half = must-be-1, high half = may-be-1.
+const IA32_VMX_CR0_FIXED0:          u32 = 0x486;
+const IA32_VMX_CR0_FIXED1:          u32 = 0x487;
+const IA32_VMX_CR4_FIXED0:          u32 = 0x488;
+const IA32_VMX_CR4_FIXED1:          u32 = 0x489;
 
 /// Apply allowed-0/allowed-1 constraints from `msr` to `desired`.
 ///
@@ -46,6 +52,17 @@ fn ctl_msr(true_msr: u32, legacy_msr: u32) -> u32 {
     // SAFETY: same as `rebase_ctl`.
     let basic = unsafe { crate::arch::cpu::rdmsr(IA32_VMX_BASIC) };
     if basic & (1u64 << 55) != 0 { true_msr } else { legacy_msr }
+}
+
+/// Apply CR fixed-bit constraints. Same allowed-0/allowed-1 layout as
+/// `rebase_ctl`, but on a 64-bit value (the high 32 bits of CR0/CR4 are
+/// reserved-must-be-zero on current parts but the masks are 64-bit so we
+/// leave them alone).
+fn rebase_cr(desired: u64, fixed0: u32, fixed1: u32) -> u64 {
+    // SAFETY: architectural MSRs available whenever VMX is on.
+    let f0 = unsafe { crate::arch::cpu::rdmsr(fixed0) };
+    let f1 = unsafe { crate::arch::cpu::rdmsr(fixed1) };
+    (desired | f0) & f1
 }
 
 /// Inputs handed to the launcher. Owning it as a struct keeps the (long)
@@ -88,7 +105,9 @@ pub fn write_vmcs(plan: &LaunchPlan) -> HyperResult<()> {
     let sec_ctl   = rebase_ctl(f::SECONDARY_ENABLE_EPT | f::SECONDARY_UNRESTRICTED_GUEST,
                                IA32_VMX_PROCBASED_CTLS2);
     let exit_ctl  = rebase_ctl(f::VMEXIT_HOST_ADDR_SPACE_SIZE,                      exit_msr);
-    let entry_ctl = rebase_ctl(f::VMENTRY_IA32E_MODE_GUEST,                         entry_msr);
+    // Real-mode guest — drop IA32E_MODE_GUEST. The blob's encoding is
+    // mode-agnostic, so 16-bit real mode runs the same bytes as long mode.
+    let entry_ctl = rebase_ctl(0,                                                   entry_msr);
 
     crate::logger::log_kv("pin_ctl",   u64::from(pin_ctl));
     crate::logger::log_kv("proc_ctl",  u64::from(proc_ctl));
@@ -104,24 +123,84 @@ pub fn write_vmcs(plan: &LaunchPlan) -> HyperResult<()> {
     vmcs::vmwrite(f::VM_ENTRY_CTLS, u64::from(entry_ctl))?;
     vmcs::vmwrite(f::EPT_POINTER, plan.eptp)?;
 
-    // ---- Guest state (long mode, flat) -----------------------------------
-    // Selectors all point at one flat code/data descriptor we expect a
-    // future patch to publish through a guest GDT in `crate::guest`.
-    vmcs::vmwrite(f::GUEST_CS_SELECTOR, 0x10)?;
-    vmcs::vmwrite(f::GUEST_DS_SELECTOR, 0x18)?;
-    vmcs::vmwrite(f::GUEST_ES_SELECTOR, 0x18)?;
-    vmcs::vmwrite(f::GUEST_FS_SELECTOR, 0x18)?;
-    vmcs::vmwrite(f::GUEST_GS_SELECTOR, 0x18)?;
-    vmcs::vmwrite(f::GUEST_SS_SELECTOR, 0x18)?;
-    vmcs::vmwrite(f::GUEST_TR_SELECTOR, 0x00)?;
-    vmcs::vmwrite(f::GUEST_LDTR_SELECTOR, 0x00)?;
+    // ---- Guest state (16-bit real mode under unrestricted-guest) ---------
+    // SDM §27.3.1.2: with SECONDARY_UNRESTRICTED_GUEST=1, CR0.PE/PG may be
+    // 0; the other CR0/CR4 fixed bits still apply via IA32_VMX_CRn_FIXEDx
+    // *but* PE and PG are explicitly removed from FIXED0 in this mode.
+    // We rebase against the MSRs and then forcibly clear PE+PG.
+    let guest_cr0 = rebase_cr(0x30, IA32_VMX_CR0_FIXED0, IA32_VMX_CR0_FIXED1)
+        & !(1u64 << 0)   // PE
+        & !(1u64 << 31); // PG
+    let guest_cr4 = rebase_cr(0,    IA32_VMX_CR4_FIXED0, IA32_VMX_CR4_FIXED1);
+    crate::logger::log_kv("guest_cr0", guest_cr0);
+    crate::logger::log_kv("guest_cr4", guest_cr4);
 
-    vmcs::vmwrite(f::GUEST_CR0, 0x8000_0021)?; // PG | NE | PE
-    vmcs::vmwrite(f::GUEST_CR3, 0)?;           // guest installs its own when it grows one
-    vmcs::vmwrite(f::GUEST_CR4, 0x0000_2000)?; // VMXE not required in guest, but PAE OK
-    vmcs::vmwrite(f::GUEST_RIP, plan.guest_rip)?;
-    vmcs::vmwrite(f::GUEST_RSP, plan.guest_rsp)?;
-    vmcs::vmwrite(f::GUEST_RFLAGS, 0x2)?;      // reserved bit
+    vmcs::vmwrite(f::GUEST_CR0, guest_cr0)?;
+    vmcs::vmwrite(f::GUEST_CR3, 0)?;
+    vmcs::vmwrite(f::GUEST_CR4, guest_cr4)?;
+
+    // Real-mode segment programming. Selectors are the segment*16 form
+    // (CS=0x0000 → base 0); base/limit/AR are the cached values.
+    // AR for code: 0x9B (P=1, S=1, type=B accessed/readable code).
+    // AR for data: 0x93 (P=1, S=1, type=3 accessed/writable data).
+    const CODE_AR: u64 = 0x9B;
+    const DATA_AR: u64 = 0x93;
+    // LDTR: type=2 (LDT), unusable bit (16) set → marked unusable.
+    const LDTR_AR: u64 = 0x1_0082;
+    // TR: type=B (busy 16-bit TSS) is the only legal value at entry per
+    // SDM §26.3.1.2 when not in long mode.
+    const TR_AR:   u64 = 0x008B;
+
+    // ES/CS/SS/DS/FS/GS — selector 0, base 0, limit 0xFFFF.
+    let segs: &[(u32, u32, u32, u32, u64)] = &[
+        (f::GUEST_ES_SELECTOR, f::GUEST_ES_BASE, f::GUEST_ES_LIMIT, f::GUEST_ES_AR, DATA_AR),
+        (f::GUEST_CS_SELECTOR, f::GUEST_CS_BASE, f::GUEST_CS_LIMIT, f::GUEST_CS_AR, CODE_AR),
+        (f::GUEST_SS_SELECTOR, f::GUEST_SS_BASE, f::GUEST_SS_LIMIT, f::GUEST_SS_AR, DATA_AR),
+        (f::GUEST_DS_SELECTOR, f::GUEST_DS_BASE, f::GUEST_DS_LIMIT, f::GUEST_DS_AR, DATA_AR),
+        (f::GUEST_FS_SELECTOR, f::GUEST_FS_BASE, f::GUEST_FS_LIMIT, f::GUEST_FS_AR, DATA_AR),
+        (f::GUEST_GS_SELECTOR, f::GUEST_GS_BASE, f::GUEST_GS_LIMIT, f::GUEST_GS_AR, DATA_AR),
+    ];
+    for &(sel, base, limit, ar_enc, ar_val) in segs {
+        vmcs::vmwrite(sel,    0)?;
+        vmcs::vmwrite(base,   0)?;
+        vmcs::vmwrite(limit,  0xFFFF)?;
+        vmcs::vmwrite(ar_enc, ar_val)?;
+    }
+
+    // LDTR — unusable.
+    vmcs::vmwrite(f::GUEST_LDTR_SELECTOR, 0)?;
+    vmcs::vmwrite(f::GUEST_LDTR_BASE,     0)?;
+    vmcs::vmwrite(f::GUEST_LDTR_LIMIT,    0xFFFF)?;
+    vmcs::vmwrite(f::GUEST_LDTR_AR,       LDTR_AR)?;
+
+    // TR — must be present (P=1) per SDM §26.3.1.2; busy-16-TSS form.
+    vmcs::vmwrite(f::GUEST_TR_SELECTOR,   0)?;
+    vmcs::vmwrite(f::GUEST_TR_BASE,       0)?;
+    vmcs::vmwrite(f::GUEST_TR_LIMIT,      0xFFFF)?;
+    vmcs::vmwrite(f::GUEST_TR_AR,         TR_AR)?;
+
+    // GDTR/IDTR — empty but valid.
+    vmcs::vmwrite(f::GUEST_GDTR_BASE,  0)?;
+    vmcs::vmwrite(f::GUEST_GDTR_LIMIT, 0xFFFF)?;
+    vmcs::vmwrite(f::GUEST_IDTR_BASE,  0)?;
+    vmcs::vmwrite(f::GUEST_IDTR_LIMIT, 0xFFFF)?;
+
+    // RIP/RSP/RFLAGS. Real-mode RIP is just the offset; CS.base=0 means
+    // linear address == offset == GPA via the EPT.
+    vmcs::vmwrite(f::GUEST_RIP,    plan.guest_rip)?;
+    vmcs::vmwrite(f::GUEST_RSP,    plan.guest_rsp)?;
+    vmcs::vmwrite(f::GUEST_RFLAGS, 0x2)?; // reserved bit-1 always set
+
+    // Misc guest state required by entry checks.
+    vmcs::vmwrite(f::VMCS_LINK_POINTER,    !0u64)?; // "no shadow VMCS"
+    vmcs::vmwrite(f::GUEST_IA32_DEBUGCTL,  0)?;
+    vmcs::vmwrite(f::GUEST_DR7,            0x400)?; // architectural reset value
+    vmcs::vmwrite(f::GUEST_SYSENTER_CS,    0)?;
+    vmcs::vmwrite(f::GUEST_SYSENTER_ESP,   0)?;
+    vmcs::vmwrite(f::GUEST_SYSENTER_EIP,   0)?;
+    vmcs::vmwrite(f::GUEST_INTERRUPTIBILITY, 0)?;
+    vmcs::vmwrite(f::GUEST_ACTIVITY_STATE,   0)?; // Active
+    vmcs::vmwrite(f::GUEST_PENDING_DBG_EXC,  0)?;
 
     Ok(())
 }

@@ -270,8 +270,12 @@ pub extern "C" fn vm_exit_dispatch() -> ! {
     let guest_rip   = vmcs::vmread(f::GUEST_RIP).unwrap_or(0);
     let qualif      = vmcs::vmread(f::EXIT_QUALIFICATION).unwrap_or(0);
     let raw_reason  = vmcs::vmread(f::EXIT_REASON).unwrap_or(0);
+    let instr_err   = vmcs::vmread(f::VM_INSTRUCTION_ERROR).unwrap_or(0);
 
     logger::log_kv("vm_exit_reason_raw", raw_reason);
+    logger::log_kv("vm_exit_basic",      raw_reason & 0xFFFF);
+    logger::log_kv("vm_exit_entry_fail", (raw_reason >> 31) & 0x1);
+    logger::log_kv("vm_instruction_err", instr_err);
     logger::log_kv("guest_rip",          guest_rip);
     logger::log_kv("exit_qualification", qualif);
     logger::log_kv("guest_rax",          regs.rax);
