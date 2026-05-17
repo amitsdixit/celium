@@ -732,7 +732,21 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
                 Arc::new(celmesh::LoopbackHyperLink::new());
             Arc::new(celmesh::CelhyperVmHost::new(link))
         }
-        _ => return Err(CelError::Invalid("unknown --vm-host (try mem|celhyper)")),
+        s if s.starts_with("celhyper-serial:") => {
+            let addr = &s["celhyper-serial:".len()..];
+            if addr.is_empty() {
+                return Err(CelError::Invalid(
+                    "--vm-host celhyper-serial: requires host:port",
+                ));
+            }
+            println!("celctl: vm-host=celhyper-serial connecting to {addr}");
+            let serial = celmesh::SerialHyperLink::connect(addr).await?;
+            let link: Arc<dyn celmesh::HyperLink> = Arc::new(serial);
+            Arc::new(celmesh::CelhyperVmHost::new(link))
+        }
+        _ => return Err(CelError::Invalid(
+            "unknown --vm-host (try mem | celhyper | celhyper-serial:host:port)",
+        )),
     };
     mesh.set_host(host.clone()).await;
 

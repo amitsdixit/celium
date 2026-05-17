@@ -331,10 +331,10 @@ fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     }
 }
 
-fn slot_mut<'a>(
-    slots: &'a mut [Option<LoopSlot>; HYPER_MAX_VMS],
+fn slot_mut(
+    slots: &mut [Option<LoopSlot>; HYPER_MAX_VMS],
     vm_id: u32,
-) -> CelResult<&'a mut LoopSlot> {
+) -> CelResult<&mut LoopSlot> {
     let i = vm_id as usize;
     if i >= HYPER_MAX_VMS {
         return Err(CelError::Invalid("hyper: vm id out of range"));
@@ -586,8 +586,7 @@ mod tests {
         let err = host
             .handle(VmOp::Create { label: big, restart_policy: RestartPolicy::Never })
             .await
-            .err()
-            .expect("oversized label must be rejected");
+            .expect_err("oversized label must be rejected");
         assert!(err.contains("32 chars"), "err={err}");
     }
 
@@ -604,8 +603,7 @@ mod tests {
         let err = host
             .handle(VmOp::Create { label: "overflow".into(), restart_policy: RestartPolicy::Never })
             .await
-            .err()
-            .expect("registry must be full");
+            .expect_err("registry must be full");
         assert!(err.contains("registry full"), "err={err}");
     }
 
@@ -620,8 +618,7 @@ mod tests {
         let err = host
             .handle(VmOp::Start { vm_id: 0 })
             .await
-            .err()
-            .expect("start-on-terminal must error");
+            .expect_err("start-on-terminal must error");
         assert!(err.contains("terminal"), "err={err}");
     }
 
