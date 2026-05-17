@@ -59,7 +59,7 @@ pub struct QuotaUsage {
 }
 
 /// A single allocation request to charge against a tenant.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct QuotaCharge {
     /// vCPUs requested.
     pub vcpus: u32,

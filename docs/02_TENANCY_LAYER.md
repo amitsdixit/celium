@@ -166,3 +166,83 @@ celctl tenant show --name acme
 * **Capability tags are stable strings.** New code that wants to add
   a denial reason must reuse one of the existing `&'static str` tags
   or extend `caps.rs` deliberately.
+
+---
+
+## W28 — Tenant Runtime Binding
+
+> Wires the W27 primitives into the **live** Core Layer host. The
+> Core Layer remains untouched.
+
+### `TenantVmHost`
+
+`celtenancy::TenantVmHost` is a `celmesh::VmHost` wrapper that
+auto-charges and refunds the tenant's `TenantStore` on every
+`VmOp` it forwards to an inner `Arc<dyn VmHost>`:
+
+```
++-------------+        +------------------+        +--------------+
+| caller     ──▶│  TenantVmHost   │──▶│  MemVmHost   │
+| (cli/api)   |        | (Tenancy Layer) |        | (Core Layer) |
++-------------+        +------------------+        +--------------+
+                              │
+                              ▼
+                      +----------------+
+                      |  TenantStore   |
+                      |  (quota book)  |
+                      +----------------+
+```
+
+For each forwarded `VmOp`:
+
+1. **Plan** a `QuotaCharge` from the op (only `Create` and
+   `CreateVolume` consume quota; everything else is zero-charge).
+2. **Charge** the `TenantStore` *before* dispatch. Quota exhaustion
+   short-circuits with `Err("tenant: quota: ...")` and the inner
+   host is never called.
+3. **Dispatch** to the inner `VmHost`. Inner-host failures
+   (including `capability denied`) trigger a **refund** so the
+   tenant's book never leaks on the error path.
+4. **Track** the charge by `vm_id` / `volume_id` on success so that
+   `Delete` / `DeleteVolume` can refund the original allocation.
+
+This means a multi-tenant deployment can share one `MemVmHost` and
+one `MemVolumeStore` across tenants while each tenant gets:
+
+* its own isolated quota book,
+* its own projected `Capabilities` bitset (root caps, or per-user
+  attenuated caps via `TenantCaps::to_mesh_capabilities()`),
+* automatic refund on both explicit delete *and* inner-host
+  failure (capability denial, validation, etc.).
+
+### Snapshot precondition
+
+`MemVmHost` mints VM and volume ids relative to the owning node
+and records the owner on first `snapshot(&node)`. Callers wrapping
+a fresh `MemVmHost` in a `TenantVmHost` **must** prime it once
+before issuing `Create` / `CreateVolume` / `CreateNetwork`:
+
+```rust
+let inner = Arc::new(MemVmHost::with_caps(caps));
+let tenant_host = TenantVmHost::new(tid, store, inner);
+let _ = tenant_host.snapshot(&node).await; // one-time prime
+```
+
+This is a Core-Layer property and is not changed by the Tenancy
+Layer.
+
+### Test coverage
+
+`crates/celtest/tests/tenant_runtime_e2e.rs` covers, end-to-end:
+
+1. **Independent quota books** — two tenants on one shared host
+   keep separate usage counters.
+2. **Quota isolation under pressure** — exhausting tenant A's
+   quota does not affect tenant B.
+3. **Per-user attenuated caps** — within one tenant, two users
+   with different `TenantCaps` see different effective hosts even
+   though they share the tenant's quota.
+4. **Capability-denied paths do not charge** — refund-on-failure
+   guarantees zero quota leak when the inner host rejects an op.
+5. **Delete refunds resources** — capacity reclaimed after
+   `Stop` + `Delete` is fully reusable.
