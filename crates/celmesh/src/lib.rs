@@ -29,6 +29,7 @@
 pub mod admin;
 pub mod federation;
 pub mod host;
+pub mod hyper_host;
 pub mod k8s;
 pub mod membership;
 pub mod mesh;
@@ -43,6 +44,7 @@ pub use capabilities::Capabilities;
 
 pub use federation::{NamespaceFederation, RemoteVm, RestartPolicy};
 pub use host::{MemVmHost, VmHost};
+pub use hyper_host::{CelhyperVmHost, HyperLink, HyperReply, HyperRequest, HyperVmRow, LoopbackHyperLink};
 pub use k8s::{K8sCluster, K8sClusterSpec, K8sNodeRole, K8sNodeRecord};
 pub use membership::{Membership, NodeId, NodeInfo, NodeStatus};
 pub use mesh::{ClusterStatus, Mesh, MeshConfig, RestartedVm};

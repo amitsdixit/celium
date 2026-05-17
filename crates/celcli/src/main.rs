@@ -330,6 +330,14 @@ struct StartArgs {
     /// tokio task off the gossip hot path.
     #[arg(long, default_value = "")]
     admin_addr: String,
+    /// W22: which VmHost backend to register on the mesh.
+    /// `mem` (default) uses the in-process `MemVmHost`; `celhyper`
+    /// uses the CelHyper bridge with a `LoopbackHyperLink` (kernel
+    /// state-machine simulator) so the bridge code path is
+    /// exercised end-to-end. Future values: `celhyper-serial:<addr>`,
+    /// `celhyper-vsock:<cid:port>`.
+    #[arg(long, default_value = "mem")]
+    vm_host: String,
 }
 
 /// Operands for `cluster invoke`. Wraps `StartArgs` plus the target
@@ -711,11 +719,21 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
     let mesh = build_mesh(&args, &mut owner_id).await?;
     let owner = NodeId(owner_id.clone());
 
-    // Register an in-memory VmHost so peers' `cluster invoke` calls
-    // land somewhere. The kernel-side IPC bridge will replace this in
-    // a future week; for now the same in-process model the local
-    // `vm` subcommand uses keeps semantics consistent.
-    let host: Arc<dyn VmHost> = Arc::new(MemVmHost::new());
+    // W22: select the VmHost backend. `mem` keeps the existing
+    // in-process model; `celhyper` routes VM lifecycle through the
+    // CelHyper bridge with a LoopbackHyperLink (Phase A) so the
+    // bridge code is exercised end-to-end. Future variants will
+    // accept `celhyper-serial:<host:port>` etc.
+    let host: Arc<dyn VmHost> = match args.vm_host.as_str() {
+        "mem" => Arc::new(MemVmHost::new()),
+        "celhyper" => {
+            println!("celctl: vm-host=celhyper (loopback kernel sim)");
+            let link: Arc<dyn celmesh::HyperLink> =
+                Arc::new(celmesh::LoopbackHyperLink::new());
+            Arc::new(celmesh::CelhyperVmHost::new(link))
+        }
+        _ => return Err(CelError::Invalid("unknown --vm-host (try mem|celhyper)")),
+    };
     mesh.set_host(host.clone()).await;
 
     // Seed the host from any pre-existing local Controller rows so
