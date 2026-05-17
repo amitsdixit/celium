@@ -499,6 +499,35 @@ fn main() -> CelResult<()> {
         Cmd::Vm { op } => {
             let mut c = Controller::load(&state_path)?
                 .with_stage_root(crate::vm::default_stage_root());
+            // W23-E3: when `CELIUM_BRIDGE_TCP=host:port` is set, the
+            // controller ships every staged boot blob through a real
+            // `celhyper` kernel via `SerialHyperLink`. Unset: legacy
+            // host-only behaviour (write `boot.blob` to disk only).
+            if let Ok(addr) = std::env::var("CELIUM_BRIDGE_TCP") {
+                if !addr.trim().is_empty() {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| CelError::Io(format!("tokio runtime: {e}")))?;
+                    let link = rt
+                        .block_on(celmesh::SerialHyperLink::connect(&addr))
+                        .map_err(|e| CelError::Io(format!(
+                            "celhyper-serial connect {addr}: {e:?}"
+                        )))?;
+                    // Drop the connect-time runtime; the sink owns its own.
+                    drop(rt);
+                    let link: std::sync::Arc<dyn celmesh::HyperLink> =
+                        std::sync::Arc::new(link);
+                    let host = std::sync::Arc::new(
+                        celmesh::CelhyperVmHost::new(link).with_strict(true),
+                    );
+                    let sink = std::sync::Arc::new(
+                        crate::bridge::HyperBootBlobSink::new(host)?,
+                    );
+                    c = c.with_stage_sink(sink);
+                    println!("celctl: vm bridge=celhyper-serial:{addr}");
+                }
+            }
             run_vm_cmd(&mut c, op)?;
             c.save()?;
         }

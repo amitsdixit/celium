@@ -252,3 +252,89 @@ async fn live_qemu_bridge_round_trips_w23b_metadata() {
         "unexpected Delete reply: {del:?}",
     );
 }
+
+/// W23-E3: end-to-end `stage_image` → `Create(boot_blob_crc32c)` →
+/// `Start` against a real kernel. Proves the new `HyperRequest::
+/// ImageLoad` wire is plumbed through `celhyper::image_loader::
+/// stage_from_hex` and that `BootImage::from_staged_or_embedded`
+/// picks the staged blob when the CRC matches.
+#[tokio::test]
+#[ignore = "requires a running QEMU+CelHyper with COM2 -> TCP (see file header)"]
+async fn live_qemu_bridge_stage_image_create_start() {
+    let Some(addr) = bridge_addr() else {
+        eprintln!("skip: CELIUM_BRIDGE_TCP unset");
+        return;
+    };
+
+    // Same retry pattern as the sibling tests.
+    let link = {
+        let mut last_err = None;
+        let mut sock = None;
+        for _ in 0..50 {
+            match SerialHyperLink::connect(addr.as_str()).await {
+                Ok(s) => { sock = Some(s); break; }
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+        match sock {
+            Some(s) => Arc::new(s),
+            None => panic!("connect {addr} failed: {last_err:?}"),
+        }
+    };
+
+    let host = CelhyperVmHost::new(link).with_strict(true);
+
+    // Small deterministic payload — well under the 4 KiB kernel cap.
+    let payload: Vec<u8> = (0..512u32)
+        .map(|i| (i.wrapping_mul(73) ^ 0xa5) as u8)
+        .collect();
+
+    let crc = host
+        .stage_image(&payload)
+        .await
+        .expect("stage_image must succeed against live kernel");
+    eprintln!("w23-e3: staged {} bytes, crc=0x{:08x}", payload.len(), crc);
+
+    // Create binds the staged image via boot_blob_crc32c.
+    let reply = host
+        .handle(VmOp::Create {
+            label: "w23-e3-stage".into(),
+            restart_policy: celmesh::RestartPolicy::Never,
+            image_path: None,
+            cpu_count:  Some(1),
+            memory_mib: Some(4),
+            boot_blob_crc32c: Some(crc),
+        })
+        .await
+        .expect("Create");
+    let vm_id = match reply {
+        VmOpReply::Created { vm_id } => vm_id,
+        other => panic!("unexpected Create reply: {other:?}"),
+    };
+
+    // Start — kernel should pick the staged image and run it to HLT.
+    let started = host
+        .handle(VmOp::Start { vm_id })
+        .await
+        .expect("Start");
+    eprintln!("w23-e3: start reply for vm {vm_id} = {started:?}");
+    match started {
+        VmOpReply::State { vm_id: vid, state } => {
+            assert_eq!(vid, vm_id);
+            assert_eq!(state, "halted", "unexpected post-start state: {state}");
+        }
+        other => panic!("unexpected start reply: {other:?}"),
+    }
+
+    let del = host
+        .handle(VmOp::Delete { vm_id })
+        .await
+        .expect("Delete");
+    assert!(
+        matches!(del, VmOpReply::Deleted { vm_id: vid } if vid == vm_id),
+        "unexpected Delete reply: {del:?}",
+    );
+}

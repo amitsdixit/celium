@@ -22,11 +22,32 @@
 //! No `unwrap`/`panic` on production paths.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use celcommon::{CelError, CelResult};
 use serde::{Deserialize, Serialize};
 
 use crate::boot;
+
+/// W23-E3: synchronous sink for boot-blob bytes.
+///
+/// `Controller::start_vm` reads the staged `boot.blob` (written by
+/// [`crate::boot::stage_boot_blob`]) and hands the bytes to the sink
+/// before transitioning the VM. The sink ships them to a real
+/// `celhyper` kernel over whatever transport the operator has wired
+/// (in practice `crate::bridge::HyperBootBlobSink`, which adapts a
+/// `celmesh::CelhyperVmHost`). The sink contract is intentionally
+/// minimal so unit tests can stand in a fake without pulling in tokio.
+///
+/// On success the sink returns the CRC32C the kernel echoed; the
+/// controller cross-checks it against the host-computed digest and
+/// fails the start on mismatch.
+pub trait BootBlobSink: Send + Sync {
+    /// Ship `bytes` to the underlying kernel-side staging slot.
+    /// `bytes.len()` is already guaranteed to be in `1..=4096`
+    /// by the time the controller calls this — sinks may rely on it.
+    fn stage(&self, bytes: &[u8]) -> CelResult<u32>;
+}
 
 /// Maximum concurrent VMs — must match `celhyper::manager::MAX_VMS`.
 pub const MAX_VMS: usize = 4;
@@ -173,6 +194,11 @@ pub struct Controller {
     /// `None` disables staging entirely (the VM still transitions
     /// through `Running → Halted` exactly as before).
     stage_root: Option<PathBuf>,
+    /// W23-E3: optional sink that ships staged boot blobs to a
+    /// real kernel-side `celhyper` bridge. `None` keeps the
+    /// historical host-only behaviour (write `boot.blob` to disk
+    /// and stop there).
+    stage_sink: Option<Arc<dyn BootBlobSink>>,
 }
 
 impl Controller {
@@ -183,6 +209,7 @@ impl Controller {
             state: ControllerState::default(),
             path: None,
             stage_root: None,
+            stage_sink: None,
         }
     }
 
@@ -198,6 +225,21 @@ impl Controller {
     #[must_use]
     pub fn stage_root(&self) -> Option<&Path> {
         self.stage_root.as_deref()
+    }
+
+    /// W23-E3: bind a [`BootBlobSink`] so that every successful
+    /// `stage_boot_blob` during [`Self::start_vm`] is also shipped
+    /// over the bridge. Builder-style.
+    #[must_use]
+    pub fn with_stage_sink(mut self, sink: Arc<dyn BootBlobSink>) -> Self {
+        self.stage_sink = Some(sink);
+        self
+    }
+
+    /// Whether a [`BootBlobSink`] is bound.
+    #[must_use]
+    pub fn has_stage_sink(&self) -> bool {
+        self.stage_sink.is_some()
     }
 
     /// Load (or initialise) a controller backed by `path`. Missing
@@ -217,7 +259,7 @@ impl Controller {
         } else {
             ControllerState::default()
         };
-        Ok(Self { state, path: Some(path), stage_root: None })
+        Ok(Self { state, path: Some(path), stage_root: None, stage_sink: None })
     }
 
     /// Persist `self` if a path is bound. No-op for in-memory mode.
@@ -406,6 +448,39 @@ impl Controller {
                 );
                 return Err(CelError::Invalid(
                     "boot blob: image content changed since last start",
+                ));
+            }
+        }
+
+        // W23-E3: ship the freshly staged blob to a kernel-side
+        // `celhyper` bridge if one is bound. Any sink error aborts
+        // the start \u2014 the VM stays in `Created` so the operator
+        // can retry after fixing the link.
+        if let (Some(d), Some(sink)) = (digest.as_ref(), self.stage_sink.as_ref()) {
+            let bytes = std::fs::read(&d.blob_path).map_err(|e| {
+                CelError::Io(format!(
+                    "read staged blob {}: {e}",
+                    d.blob_path.display()
+                ))
+            })?;
+            let echoed = sink.stage(&bytes).map_err(|e| {
+                tracing::error!(
+                    vm_id = vm_id_raw,
+                    blob  = %d.blob_path.display(),
+                    error = ?e,
+                    "vm start aborted: boot blob sink rejected payload",
+                );
+                e
+            })?;
+            if echoed != d.crc32c {
+                tracing::error!(
+                    vm_id = vm_id_raw,
+                    expected = format!("{:08x}", d.crc32c),
+                    echoed   = format!("{:08x}", echoed),
+                    "vm start aborted: kernel echoed crc differs from host digest",
+                );
+                return Err(CelError::Invalid(
+                    "boot blob: kernel echoed crc differs from host digest",
                 ));
             }
         }
@@ -952,5 +1027,124 @@ mod tests {
         let s = c.stats();
         assert_eq!(s.allocated, 2);
         assert_eq!(s.with_boot_blob, 1);
+    }
+
+    // -- W23-E3: BootBlobSink integration ------------------------------
+
+    /// Test fake: records every payload it sees and echoes a chosen CRC.
+    struct RecordingSink {
+        calls: std::sync::Mutex<Vec<Vec<u8>>>,
+        echo:  std::sync::Mutex<Box<dyn FnMut(&[u8]) -> CelResult<u32> + Send>>,
+    }
+
+    impl RecordingSink {
+        fn new<F>(echo: F) -> Self
+        where
+            F: FnMut(&[u8]) -> CelResult<u32> + Send + 'static,
+        {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                echo:  std::sync::Mutex::new(Box::new(echo)),
+            }
+        }
+        fn calls(&self) -> Vec<Vec<u8>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl BootBlobSink for RecordingSink {
+        fn stage(&self, bytes: &[u8]) -> CelResult<u32> {
+            self.calls.lock().unwrap().push(bytes.to_vec());
+            (self.echo.lock().unwrap())(bytes)
+        }
+    }
+
+    #[test]
+    fn start_vm_ships_staged_blob_to_sink_when_bound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let img = synth_raw(tmp.path(), "disk.img", 0xab);
+        let stage = tmp.path().join("stage");
+
+        // Echo back the host-computed CRC \u2014 the controller is
+        // expected to accept that and transition to `Halted`.
+        let sink = Arc::new(RecordingSink::new(|b| Ok(celimage::crc32c(b))));
+        let mut c = Controller::in_memory()
+            .with_stage_root(&stage)
+            .with_stage_sink(sink.clone() as Arc<dyn BootBlobSink>);
+        assert!(c.has_stage_sink());
+
+        let id = c.create_vm_with(VmSpec {
+            label: "img".into(),
+            image_path: Some(img.display().to_string()),
+            ..Default::default()
+        }).unwrap();
+
+        c.start_vm(id).unwrap();
+        let r = &c.list_vms()[0];
+        assert_eq!(r.state, VmState::Halted);
+
+        let calls = sink.calls();
+        assert_eq!(calls.len(), 1, "sink should be hit exactly once");
+        assert_eq!(calls[0].len(), boot::BOOT_BLOB_LEN);
+        assert!(calls[0].iter().all(|&b| b == 0xab));
+        assert_eq!(r.boot_blob_crc32c, Some(celimage::crc32c(&calls[0])));
+    }
+
+    #[test]
+    fn start_vm_skips_sink_when_no_image_path() {
+        let sink = Arc::new(RecordingSink::new(|_| Ok(0)));
+        let mut c = Controller::in_memory()
+            .with_stage_sink(sink.clone() as Arc<dyn BootBlobSink>);
+        let id = c.create_vm("noimg").unwrap();
+        c.start_vm(id).unwrap();
+        assert!(sink.calls().is_empty(), "sink must not fire without an image");
+    }
+
+    #[test]
+    fn start_vm_propagates_sink_error_and_leaves_state_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let img = synth_raw(tmp.path(), "disk.img", 0xcd);
+        let stage = tmp.path().join("stage");
+
+        let sink = Arc::new(RecordingSink::new(|_| {
+            Err(CelError::Io("simulated kernel refusal".into()))
+        }));
+        let mut c = Controller::in_memory()
+            .with_stage_root(&stage)
+            .with_stage_sink(sink.clone() as Arc<dyn BootBlobSink>);
+        let id = c.create_vm_with(VmSpec {
+            label: "img".into(),
+            image_path: Some(img.display().to_string()),
+            ..Default::default()
+        }).unwrap();
+
+        let err = c.start_vm(id).unwrap_err();
+        assert!(matches!(err, CelError::Io(_)), "got {err:?}");
+        let r = &c.list_vms()[0];
+        assert_eq!(r.state, VmState::Created, "VM must remain Created on sink failure");
+        assert!(r.boot_blob_crc32c.is_none());
+    }
+
+    #[test]
+    fn start_vm_rejects_sink_crc_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let img = synth_raw(tmp.path(), "disk.img", 0xee);
+        let stage = tmp.path().join("stage");
+
+        // Echo a CRC that cannot match the actual content.
+        let sink = Arc::new(RecordingSink::new(|_| Ok(0xdead_beef)));
+        let mut c = Controller::in_memory()
+            .with_stage_root(&stage)
+            .with_stage_sink(sink as Arc<dyn BootBlobSink>);
+        let id = c.create_vm_with(VmSpec {
+            label: "img".into(),
+            image_path: Some(img.display().to_string()),
+            ..Default::default()
+        }).unwrap();
+
+        let err = c.start_vm(id).unwrap_err();
+        assert!(matches!(err, CelError::Invalid(_)), "got {err:?}");
+        let r = &c.list_vms()[0];
+        assert_eq!(r.state, VmState::Created);
     }
 }
