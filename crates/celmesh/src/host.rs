@@ -434,10 +434,10 @@ impl MemVmHost {
         }
     }
 
-    fn slot_mut<'a>(
-        slots: &'a mut [Option<Slot>; MAX_SLOTS],
+    fn slot_mut(
+        slots: &mut [Option<Slot>; MAX_SLOTS],
         vm_id: u32,
-    ) -> Result<&'a mut Slot, String> {
+    ) -> Result<&mut Slot, String> {
         let i = vm_id as usize;
         if i >= MAX_SLOTS {
             return Err("vm id out of range".into());
@@ -460,6 +460,11 @@ impl MemVmHost {
                 owner_alive: true,
                 restart_policy: s.restart_policy,
                 volumes: s.volumes.clone(),
+                // MemVmHost has no image-aware fields; leave as None.
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
             }
         })).collect()
     }

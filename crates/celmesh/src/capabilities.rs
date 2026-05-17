@@ -20,9 +20,10 @@
 //! let host = MemVmHost::new().with_caps(caps);
 //! ```
 //!
-//! The default for [`MemVmHost::new`] is [`Capabilities::ALL`] so
-//! existing call sites and tests continue to work; downstream
-//! integrators wire restrictive sets explicitly.
+//! The default for [`crate::host::MemVmHost::new`] is
+//! [`Capabilities::ALL`] so existing call sites and tests continue
+//! to work; downstream integrators wire restrictive sets
+//! explicitly.
 
 use std::ops::{BitOr, BitOrAssign};
 
@@ -77,8 +78,9 @@ impl Capabilities {
     /// `DeleteLoadBalancer`.
     pub const LB_WRITE:             Self = Self(1 << 12);
 
-    /// Every capability granted. The default for [`MemVmHost::new`]
-    /// so back-compat tests don't have to wire caps explicitly.
+    /// Every capability granted. The default for
+    /// [`crate::host::MemVmHost::new`] so back-compat tests don't
+    /// have to wire caps explicitly.
     pub const ALL: Self = Self(
         Self::VM_LIFECYCLE_READ.0
             | Self::VM_LIFECYCLE_WRITE.0

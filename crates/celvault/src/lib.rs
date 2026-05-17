@@ -25,6 +25,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 mod file_store;
 pub mod network;
@@ -468,7 +469,7 @@ impl VolumeStore for MemVolumeStore {
     fn list_snapshots(&self, volume: Option<&VolumeId>) -> Vec<SnapshotMeta> {
         let g = self.lock();
         g.snaps.values()
-            .filter(|s| volume.map_or(true, |v| &s.meta.volume == v))
+            .filter(|s| volume.is_none_or(|v| &s.meta.volume == v))
             .map(|s| s.meta.clone())
             .collect()
     }

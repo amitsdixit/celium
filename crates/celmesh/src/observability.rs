@@ -116,7 +116,16 @@ impl crate::Mesh {
 
         for r in &alive {
             let id = r.id.clone();
-            let mut node_row = by_node.remove(&id).expect("seeded above");
+            // `by_node` was seeded above from `members`; `alive` is a
+            // filtered view of the same vector, so every entry must
+            // already exist. We still avoid `expect` to honour the
+            // "no panic on production paths" rule — a missing row
+            // means another mutation slipped in between iterations,
+            // in which case we skip it rather than abort.
+            let Some(mut node_row) = by_node.remove(&id) else {
+                tracing::warn!(node = %id, "cluster_report: alive row missing from by_node");
+                continue;
+            };
 
             // VMs. Use the federation count for self; for peers,
             // use the federated rows we already have (they came in

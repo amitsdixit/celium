@@ -282,7 +282,7 @@ impl VolumeStore for FileVolumeStore {
     fn list_snapshots(&self, volume: Option<&VolumeId>) -> Vec<SnapshotMeta> {
         let g = self.lock();
         g.manifest.snapshots.values()
-            .filter(|s| volume.map_or(true, |v| &s.volume == v))
+            .filter(|s| volume.is_none_or(|v| &s.volume == v))
             .cloned()
             .collect()
     }
@@ -413,6 +413,81 @@ mod tests {
         // Restore brings the original bytes back.
         s2.restore_snapshot(&snap.id).unwrap();
         assert_eq!(&s2.read(&v.id, 0, 8).unwrap(), b"original");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- W19 Phase C: integrity scrub end-to-end ----------------------------
+
+    #[test]
+    fn integrity_check_is_clean_for_well_formed_store() {
+        let root = tmp_root();
+        let s = FileVolumeStore::open_or_create(&root).unwrap();
+        let v1 = s.create("n1", "a", 16).unwrap();
+        s.write(&v1.id, 0, &[0x11; 16]).unwrap();
+        let _snap = s.create_snapshot(&v1.id, "snap-a").unwrap();
+        let v2 = s.create("n1", "b", 32).unwrap();
+        s.write(&v2.id, 0, &[0x22; 32]).unwrap();
+
+        let rep = s.integrity_check().unwrap();
+        assert!(rep.is_clean(), "errors: {:?}", rep.errors);
+        assert_eq!(rep.volumes_checked, 2);
+        assert_eq!(rep.snapshots_checked, 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrity_check_detects_torn_volume_body() {
+        // Simulate a power-loss / partial-write that leaves a
+        // volume body shorter than the manifest declares. The
+        // override on FileVolumeStore must surface this as an
+        // error row without panicking.
+        let root = tmp_root();
+        let s = FileVolumeStore::open_or_create(&root).unwrap();
+        let v = s.create("n3", "torn", 64).unwrap();
+        s.write(&v.id, 0, &[0xAB; 64]).unwrap();
+        s.flush().unwrap();
+
+        // Truncate the on-disk body behind the store's back.
+        let body = root.join("volumes").join("n3_v1.bin");
+        assert!(body.exists(), "expected volume body at {body:?}");
+        {
+            let f = std::fs::OpenOptions::new().write(true).open(&body).unwrap();
+            f.set_len(32).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let rep = s.integrity_check().unwrap();
+        assert!(!rep.is_clean(), "expected at least one error");
+        assert_eq!(rep.volumes_checked, 1);
+        assert!(
+            rep.errors.iter().any(|e| e.contains("on-disk len 32") && e.contains("declared 64")),
+            "errors: {:?}", rep.errors,
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrity_check_detects_missing_volume_body() {
+        // A manifest entry whose backing file vanished must be
+        // reported, not crash.
+        let root = tmp_root();
+        let s = FileVolumeStore::open_or_create(&root).unwrap();
+        let v = s.create("n4", "gone", 8).unwrap();
+        s.write(&v.id, 0, &[0xCC; 8]).unwrap();
+        s.flush().unwrap();
+
+        let body = root.join("volumes").join("n4_v1.bin");
+        std::fs::remove_file(&body).unwrap();
+
+        let rep = s.integrity_check().unwrap();
+        assert!(!rep.is_clean());
+        assert!(
+            rep.errors.iter().any(|e| e.contains("stat:")),
+            "errors: {:?}", rep.errors,
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

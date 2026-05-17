@@ -68,6 +68,27 @@ pub struct RemoteVm {
     /// Empty by default to stay wire-compatible with W11 senders.
     #[serde(default)]
     pub volumes: Vec<VolumeAttachment>,
+    /// W18.4: image-aware metadata gossiped so cluster-wide tools
+    /// (`celctl cluster vms`) can render image + shape without
+    /// querying the owner directly. All fields are `Option` so
+    /// W11/W12/W17 senders that omit them still merge cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+    /// Logical vCPU count selected at `vm create --cpu`. `None` for
+    /// rows produced by W11/W12/W17 senders or by hosts that do not
+    /// track CPU shape (`MemVmHost`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_count: Option<u32>,
+    /// Guest RAM in MiB selected at `vm create --memory`. `None`
+    /// when the originating sender omits it (older protocol
+    /// versions or hosts that have no notion of memory shape).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mib: Option<u64>,
+    /// CRC-32C of the most recent staged boot blob, when known.
+    /// Lets remote operators correlate the row with
+    /// `celctl image checksum`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_blob_crc32c: Option<u32>,
 }
 
 fn default_owner_alive() -> bool { true }
@@ -184,6 +205,10 @@ mod tests {
             owner_alive: true,
             restart_policy: RestartPolicy::Never,
             volumes: Vec::new(),
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         }
     }
 
@@ -229,5 +254,48 @@ mod tests {
         assert!(f.resolve("/cluster/a/vms/8").unwrap().is_none());
         assert!(f.resolve("/wrong").is_err());
         assert!(f.resolve("/cluster/a/vms/").is_err());
+    }
+
+    // W18.4: image-aware metadata must round-trip through federation
+    // (LWW merge from a remote peer) and through wire serialisation.
+    #[test]
+    fn image_metadata_propagates_through_merge() {
+        let mut f = NamespaceFederation::new(NodeId::from("a"));
+        let mut row = vm("b", 0, 1);
+        row.image_path       = Some("/tmp/disk.qcow2".into());
+        row.cpu_count        = Some(4);
+        row.memory_mib       = Some(2048);
+        row.boot_blob_crc32c = Some(0xDEAD_BEEF);
+        assert!(f.merge(row));
+        let got = &f.list()[0];
+        assert_eq!(got.image_path.as_deref(), Some("/tmp/disk.qcow2"));
+        assert_eq!(got.cpu_count, Some(4));
+        assert_eq!(got.memory_mib, Some(2048));
+        assert_eq!(got.boot_blob_crc32c, Some(0xDEAD_BEEF));
+    }
+
+    #[test]
+    fn legacy_wire_payload_without_image_fields_still_deserialises() {
+        // A W17-era peer omits the W18.4 fields entirely. JSON without
+        // them must still round-trip into a RemoteVm with `None`s — this
+        // is the cross-version compat guarantee.
+        let wire = serde_json::json!({
+            "owner": "b",
+            "vm_id": 3,
+            "label": "legacy",
+            "state": "created",
+            "last_exit": null,
+            "epoch": 1,
+            "hlc": 1,
+            "owner_alive": true,
+            "restart_policy": "never",
+            "volumes": []
+        }).to_string();
+        let r: RemoteVm = serde_json::from_str(&wire).unwrap();
+        assert_eq!(r.label, "legacy");
+        assert!(r.image_path.is_none());
+        assert!(r.cpu_count.is_none());
+        assert!(r.memory_mib.is_none());
+        assert!(r.boot_blob_crc32c.is_none());
     }
 }

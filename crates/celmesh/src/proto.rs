@@ -5,8 +5,8 @@
 //!
 //! * `Hello`   — sent on first contact with a peer.
 //! * `Sync`    — a full delta of this node's view: membership rows
-//!               plus the VMs it owns. Receivers merge by
-//!               last-writer-wins on `(epoch, hlc)`.
+//!   plus the VMs it owns. Receivers merge by
+//!   last-writer-wins on `(epoch, hlc)`.
 //! * `Goodbye` — voluntary departure.
 //!
 //! The format is intentionally human-readable for the v0.1 sprint;

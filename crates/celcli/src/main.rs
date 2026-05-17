@@ -9,7 +9,16 @@
 //! the controller's view across the cluster.
 #![forbid(unsafe_code)]
 #![warn(rust_2018_idioms)]
+// CLI table headers intentionally mirror the format-string shape of
+// the data-row `println!` that follows. Allowing `print_literal`
+// keeps header + row formatting symmetric and visually aligned.
+#![allow(clippy::print_literal)]
+// Clap-derived top-level `Cmd` enum is created exactly once per CLI
+// invocation; boxing variants purely to balance their size buys
+// nothing and obscures the command surface.
+#![allow(clippy::large_enum_variant)]
 
+pub mod boot;
 pub mod bridge;
 pub mod vm;
 
@@ -25,7 +34,7 @@ use celmesh::{
 use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use crate::vm::{Controller, VmId};
+use crate::vm::{Controller, VmId, VmSpec};
 
 #[derive(Debug, Parser)]
 #[command(name = "celctl", version, about = "Celium operator CLI")]
@@ -49,6 +58,12 @@ enum Cmd {
     Vm {
         #[command(subcommand)]
         op: VmCmd,
+    },
+    /// W18: inspect a disk image (raw / qcow2). VMDK and VHDX are
+    /// recognised but their backends land in Phase 2 (W18.2).
+    Image {
+        #[command(subcommand)]
+        op: ImageCmd,
     },
     /// Manage cluster membership and federation.
     Cluster {
@@ -79,6 +94,12 @@ enum ClusterCmd {
     /// Print a single cluster status snapshot — members, VMs,
     /// alive/suspect/dead counters, supervisor flag.
     Status(StartArgs),
+    /// W20: print the Prometheus-format mesh metrics exposition
+    /// after letting gossip settle. Future revisions will expose this
+    /// as a long-lived `/metrics` HTTP endpoint; the one-shot form
+    /// here lets operators capture a snapshot from any node without
+    /// running a daemon.
+    Metrics(StartArgs),
     /// W14: polished VM subcommand tree (create/list/start/stop/
     /// delete/attach-volume/detach-volume) targeting the cluster.
     Vm {
@@ -372,6 +393,14 @@ enum VmCmd {
     Stop(IdArg),
     /// Print the state of a single VM.
     State(IdArg),
+    /// W19: move a terminal VM back to `Created` without freeing the
+    /// slot. Preserves the recorded boot-blob digest so a subsequent
+    /// `start` runs image-content drift detection against it.
+    Reset(IdArg),
+    /// W20: print aggregate controller counters (slot occupancy,
+    /// per-state totals, boot-blob coverage). Operator-friendly
+    /// observability that does not require running a mesh.
+    Stats,
 }
 
 #[derive(Debug, Args)]
@@ -379,12 +408,43 @@ struct CreateArgs {
     /// Free-form label, ≤ 32 chars.
     #[arg(long, default_value = "")]
     label: String,
+    /// W18: path to a backing disk image. The file is validated
+    /// (format-detected and, for qcow2, header-parsed) up front so
+    /// bad images fail at create time instead of at start time. The
+    /// path is then stored verbatim on the VM record. `celhyper`
+    /// consumption of this field is gated on milestone W18.3.
+    #[arg(long)]
+    image: Option<PathBuf>,
+    /// W18: vCPU count to request, 1..=64.
+    #[arg(long)]
+    cpu: Option<u32>,
+    /// W18: guest RAM. Accepts plain bytes or `K`/`M`/`G`/`T` suffixes
+    /// (case-insensitive); SI and binary suffixes are treated
+    /// identically (both `4G` and `4Gi` mean 4 GiB).
+    #[arg(long)]
+    memory: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct IdArg {
     /// Either a numeric id (`0`) or a path (`/vms/0`).
     target: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum ImageCmd {
+    /// Inspect a disk image and print its format / size / cluster info.
+    Inspect(ImageInspectArgs),
+    /// W19: compute a content-stable CRC-32C over the entire virtual
+    /// disk. Useful for attesting that two image files (potentially
+    /// in different on-disk formats) hold the same logical data.
+    Checksum(ImageInspectArgs),
+}
+
+#[derive(Debug, Args)]
+struct ImageInspectArgs {
+    /// Path to the image file.
+    path: PathBuf,
 }
 
 fn main() -> CelResult<()> {
@@ -403,9 +463,13 @@ fn main() -> CelResult<()> {
             tracing::info!("probe: no hypervisor RPC implemented yet (week 1 stub)");
         }
         Cmd::Vm { op } => {
-            let mut c = Controller::load(&state_path)?;
+            let mut c = Controller::load(&state_path)?
+                .with_stage_root(crate::vm::default_stage_root());
             run_vm_cmd(&mut c, op)?;
             c.save()?;
+        }
+        Cmd::Image { op } => {
+            run_image_cmd(op)?;
         }
         Cmd::Cluster { op } => {
             // Tokio runtime is constructed lazily so `version` /
@@ -423,15 +487,45 @@ fn main() -> CelResult<()> {
 fn run_vm_cmd(c: &mut Controller, op: VmCmd) -> CelResult<()> {
     match op {
         VmCmd::Create(a) => {
-            let id = c.create_vm(a.label)?;
+            // Validate the image up front so bad files fail loudly at
+            // create time, not later at start time.
+            if let Some(p) = &a.image {
+                let info = celimage::inspect(p)?;
+                tracing::info!(
+                    image = %p.display(),
+                    format = info.format.tag(),
+                    virtual_size = info.virtual_size,
+                    "vm create: image validated",
+                );
+            }
+            let memory_mib = a.memory.as_deref()
+                .map(parse_size_to_mib)
+                .transpose()?;
+            let spec = VmSpec {
+                label: a.label,
+                image_path: a.image.as_ref().map(|p| p.display().to_string()),
+                cpu_count: a.cpu,
+                memory_mib,
+            };
+            let id = c.create_vm_with(spec)?;
             println!("created {} ({})", id.0, Controller::path_for(id));
         }
         VmCmd::List => {
             let rows = c.list_vms();
-            println!("{:>4}  {:<8}  {:<10}  {}", "id", "state", "last_exit", "label");
+            println!(
+                "{:>4}  {:<8}  {:<10}  {:<4}  {:<8}  {:<24}  {}",
+                "id", "state", "last_exit", "cpu", "mem_mib", "image", "label",
+            );
             for r in rows {
                 let exit = r.last_exit.map_or_else(|| "-".to_string(), |x| x.to_string());
-                println!("{:>4}  {:<8}  {:<10}  {}", r.id.0, r.state.tag(), exit, r.label);
+                let cpu  = r.cpu_count.map_or_else(|| "-".to_string(), |x| x.to_string());
+                let mem  = r.memory_mib.map_or_else(|| "-".to_string(), |x| x.to_string());
+                let img  = r.image_path.clone().unwrap_or_else(|| "-".to_string());
+                let img_trunc = if img.len() > 24 { format!("…{}", &img[img.len() - 23..]) } else { img };
+                println!(
+                    "{:>4}  {:<8}  {:<10}  {:<4}  {:<8}  {:<24}  {}",
+                    r.id.0, r.state.tag(), exit, cpu, mem, img_trunc, r.label,
+                );
             }
         }
         VmCmd::Start(a) => {
@@ -449,8 +543,105 @@ fn run_vm_cmd(c: &mut Controller, op: VmCmd) -> CelResult<()> {
             let s = c.vm_state(id)?;
             println!("{} {}", Controller::path_for(id), s.tag());
         }
+        VmCmd::Reset(a) => {
+            let id = resolve(c, &a.target)?;
+            let s = c.reset_vm(id)?;
+            println!("reset {} -> {}", id.0, s.tag());
+        }
+        VmCmd::Stats => {
+            let s = c.stats();
+            println!("slots          {}/{} used ({} free)",
+                     s.allocated, s.slots_total, s.slots_free);
+            println!("created        {}", s.created);
+            println!("running        {}", s.running);
+            println!("halted         {}", s.halted);
+            println!("stopped        {}", s.stopped);
+            println!("faulted        {}", s.faulted);
+            println!("with_boot_blob {}", s.with_boot_blob);
+        }
     }
     Ok(())
+}
+
+fn run_image_cmd(op: ImageCmd) -> CelResult<()> {
+    match op {
+        ImageCmd::Inspect(a) => {
+            let info = celimage::inspect(&a.path)?;
+            let cluster = info.cluster_size
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "-".into());
+            println!("path           {}", a.path.display());
+            println!("format         {}", info.format.tag());
+            println!("backend        {}", info.backend);
+            println!("virtual_size   {} ({})", info.virtual_size, human_size(info.virtual_size));
+            println!("cluster_size   {}", cluster);
+        }
+        ImageCmd::Checksum(a) => {
+            let img = celimage::open(&a.path)?;
+            let crc = celimage::full_image_crc32c(img.as_ref())?;
+            println!("path           {}", a.path.display());
+            println!("format         {}", img.info().format.tag());
+            println!("virtual_size   {} ({})", img.virtual_size(), human_size(img.virtual_size()));
+            println!("crc32c         {:08x}", crc);
+        }
+    }
+    Ok(())
+}
+
+/// Parse a memory size like `4G`, `512Mi`, `2048M`, `1073741824` to MiB.
+/// SI (`K`, `M`, `G`, `T`) and binary (`Ki`, `Mi`, `Gi`, `Ti`) suffixes
+/// are treated identically — both `4G` and `4Gi` mean 4 GiB. Plain
+/// integers are interpreted as raw bytes.
+fn parse_size_to_mib(s: &str) -> CelResult<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(CelError::Invalid("memory: empty"));
+    }
+    // Split numeric prefix from suffix.
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (num_str, suffix) = s.split_at(split);
+    let n: u64 = num_str.parse()
+        .map_err(|_| CelError::Invalid("memory: not a non-negative integer"))?;
+    let suffix = suffix.trim_end_matches('B').trim_end_matches('b').to_ascii_uppercase();
+    let bytes: u64 = match suffix.as_str() {
+        "" => n,
+        "K" | "KI" => n.checked_mul(1024)
+            .ok_or(CelError::Invalid("memory: overflow"))?,
+        "M" | "MI" => n.checked_mul(1024 * 1024)
+            .ok_or(CelError::Invalid("memory: overflow"))?,
+        "G" | "GI" => n.checked_mul(1024 * 1024 * 1024)
+            .ok_or(CelError::Invalid("memory: overflow"))?,
+        "T" | "TI" => n.checked_mul(1024u64.pow(4))
+            .ok_or(CelError::Invalid("memory: overflow"))?,
+        _ => return Err(CelError::Invalid("memory: unknown suffix")),
+    };
+    if bytes == 0 {
+        return Err(CelError::Invalid("memory: zero"));
+    }
+    if bytes % (1024 * 1024) != 0 {
+        return Err(CelError::Invalid("memory: not a multiple of 1 MiB"));
+    }
+    Ok(bytes / (1024 * 1024))
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: &[(u64, &str)] = &[
+        (1024u64.pow(4), "TiB"),
+        (1024u64.pow(3), "GiB"),
+        (1024u64.pow(2), "MiB"),
+        (1024u64,        "KiB"),
+    ];
+    for (div, label) in UNITS {
+        if bytes >= *div {
+            let q = bytes / div;
+            let r = bytes % div;
+            if r == 0 {
+                return format!("{q} {label}");
+            }
+            return format!("{:.2} {label}", bytes as f64 / *div as f64);
+        }
+    }
+    format!("{bytes} B")
 }
 
 /// Accept either `"7"` or `"/vms/7"`. Numeric form is for terse shell
@@ -476,6 +667,7 @@ async fn run_cluster_cmd(state_path: &std::path::Path, op: ClusterCmd) -> CelRes
         ClusterCmd::InvokePath(args) => cluster_invoke_path(args).await,
         ClusterCmd::Recover(args) => cluster_recover(args).await,
         ClusterCmd::Status(args)  => cluster_status(args).await,
+        ClusterCmd::Metrics(args) => cluster_metrics(args).await,
         ClusterCmd::Vm  { op }    => cluster_vm_cmd(op).await,
         ClusterCmd::Vol { op }    => cluster_vol_cmd(op).await,
     }
@@ -600,9 +792,9 @@ async fn cluster_invoke(args: InvokeArgs) -> CelResult<()> {
     let restart = match args.restart.as_str() {
         "always" => RestartPolicy::Always,
         "never"  => RestartPolicy::Never,
-        other    => return Err(CelError::Invalid(match other {
-            _ => "restart: expected 'never' or 'always'",
-        })),
+        _ => return Err(CelError::Invalid(
+            "restart: expected 'never' or 'always'",
+        )),
     };
     let op = match args.op.as_str() {
         "create" => VmOp::Create { label: args.label.clone(), restart_policy: restart },
@@ -804,6 +996,20 @@ async fn cluster_status(args: StartArgs) -> CelResult<()> {
     for v in &s.vms {
         println!("{:<28}  {:<8}  {:<6}  {}", v.path(), v.state, v.owner_alive, v.label);
     }
+    let _ = mesh.shutdown().await;
+    Ok(())
+}
+
+/// W20: print a Prometheus-format snapshot of mesh metrics for this
+/// node after letting gossip settle for `--settle` seconds. No host
+/// is installed; counters reflect transport + gossip activity only,
+/// which is the right surface for "is this node talking to the
+/// cluster" diagnostics.
+async fn cluster_metrics(args: StartArgs) -> CelResult<()> {
+    let mut owner_id = String::new();
+    let mesh = build_mesh(&args, &mut owner_id).await?;
+    tokio::time::sleep(Duration::from_secs(args.settle.max(1))).await;
+    print!("{}", mesh.metrics_prometheus());
     let _ = mesh.shutdown().await;
     Ok(())
 }
@@ -1137,8 +1343,8 @@ mod tests {
     #[test]
     fn create_then_list_then_state() {
         let mut c = Controller::in_memory();
-        run_vm_cmd(&mut c, VmCmd::Create(CreateArgs { label: "alpha".into() })).unwrap();
-        run_vm_cmd(&mut c, VmCmd::Create(CreateArgs { label: "beta".into() })).unwrap();
+        run_vm_cmd(&mut c, VmCmd::Create(CreateArgs { label: "alpha".into(), image: None, cpu: None, memory: None })).unwrap();
+        run_vm_cmd(&mut c, VmCmd::Create(CreateArgs { label: "beta".into(), image: None, cpu: None, memory: None })).unwrap();
         run_vm_cmd(&mut c, VmCmd::List).unwrap();
         run_vm_cmd(&mut c, VmCmd::State(IdArg { target: "/vms/1".into() })).unwrap();
     }
@@ -1170,8 +1376,57 @@ mod tests {
     fn create_label_too_long_is_rejected() {
         let mut c = Controller::in_memory();
         let big = "x".repeat(33);
-        let r = run_vm_cmd(&mut c, VmCmd::Create(CreateArgs { label: big }));
+        let r = run_vm_cmd(&mut c, VmCmd::Create(CreateArgs { label: big, image: None, cpu: None, memory: None }));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn parse_size_to_mib_accepts_common_forms() {
+        assert_eq!(parse_size_to_mib("1M").unwrap(), 1);
+        assert_eq!(parse_size_to_mib("1Mi").unwrap(), 1);
+        assert_eq!(parse_size_to_mib("4G").unwrap(), 4 * 1024);
+        assert_eq!(parse_size_to_mib("4Gi").unwrap(), 4 * 1024);
+        assert_eq!(parse_size_to_mib("1048576").unwrap(), 1); // raw bytes
+    }
+
+    #[test]
+    fn parse_size_to_mib_rejects_non_mib_aligned() {
+        assert!(parse_size_to_mib("1023K").is_err());
+        assert!(parse_size_to_mib("0").is_err());
+        assert!(parse_size_to_mib("12X").is_err());
+        assert!(parse_size_to_mib("").is_err());
+    }
+
+    #[test]
+    fn create_with_image_validates_and_records() {
+        use std::io::Write;
+        let mut t = tempfile::NamedTempFile::new().unwrap();
+        t.write_all(&[0u8; 4096]).unwrap();
+        t.flush().unwrap();
+        let mut c = Controller::in_memory();
+        let args = CreateArgs {
+            label: "img-vm".into(),
+            image: Some(t.path().to_path_buf()),
+            cpu: Some(2),
+            memory: Some("128M".into()),
+        };
+        run_vm_cmd(&mut c, VmCmd::Create(args)).unwrap();
+        let row = &c.list_vms()[0];
+        assert_eq!(row.cpu_count, Some(2));
+        assert_eq!(row.memory_mib, Some(128));
+        assert!(row.image_path.is_some());
+    }
+
+    #[test]
+    fn create_with_bad_image_path_fails() {
+        let mut c = Controller::in_memory();
+        let args = CreateArgs {
+            label: "bad".into(),
+            image: Some(PathBuf::from("/definitely/does/not/exist.qcow2")),
+            cpu: None,
+            memory: None,
+        };
+        assert!(run_vm_cmd(&mut c, VmCmd::Create(args)).is_err());
     }
 }
 

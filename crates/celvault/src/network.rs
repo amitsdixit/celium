@@ -404,6 +404,7 @@ pub trait NetworkStore: Send + Sync {
 
     // -- Load balancers
     /// Create a load balancer with the given backends.
+    #[allow(clippy::too_many_arguments)] // Trait shape is part of the public API; refactoring to a builder is W21.
     fn create_load_balancer(
         &self,
         owner: &str,

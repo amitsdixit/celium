@@ -23,6 +23,20 @@ use crate::proto::MAX_FRAME_BYTES;
 /// growing memory without bound.
 const RX_BUFFER: usize = 256;
 
+/// Boxed future returned by [`Transport::recv`]. One frame plus the
+/// source address as a string (whatever scheme the transport uses).
+pub type RecvFut<'a> = core::pin::Pin<
+    Box<dyn core::future::Future<Output = CelResult<(Vec<u8>, String)>> + Send + 'a>,
+>;
+
+/// Boxed future returned by [`Transport::send`]. Unit on success.
+pub type SendFut<'a> = core::pin::Pin<
+    Box<dyn core::future::Future<Output = CelResult<()>> + Send + 'a>,
+>;
+
+/// Internal alias for the in-memory routing table — `addr → mpsc sender`.
+type Routes = Arc<Mutex<HashMap<String, mpsc::Sender<(Vec<u8>, String)>>>>;
+
 /// Pluggable gossip transport. Implementations must be cheap to
 /// share across tasks (`Send + Sync + 'static`).
 ///
@@ -35,16 +49,10 @@ pub trait Transport: Send + Sync + 'static {
 
     /// Receive the next frame plus the source address. Cancellation
     /// safe.
-    fn recv<'a>(
-        &'a self,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = CelResult<(Vec<u8>, String)>> + Send + 'a>>;
+    fn recv<'a>(&'a self) -> RecvFut<'a>;
 
     /// Send `bytes` to `peer`.
-    fn send<'a>(
-        &'a self,
-        peer: &'a str,
-        bytes: &'a [u8],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = CelResult<()>> + Send + 'a>>;
+    fn send<'a>(&'a self, peer: &'a str, bytes: &'a [u8]) -> SendFut<'a>;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,7 +65,7 @@ pub trait Transport: Send + Sync + 'static {
 pub struct MemTransportFactory {
     /// Map of address -> sender. Cloneable; the inner Mutex protects
     /// the routing table during connect/disconnect.
-    routes: Arc<Mutex<HashMap<String, mpsc::Sender<(Vec<u8>, String)>>>>,
+    routes: Routes,
 }
 
 impl MemTransportFactory {
@@ -89,15 +97,13 @@ impl MemTransportFactory {
 pub struct MemTransport {
     addr:   String,
     rx:     Mutex<mpsc::Receiver<(Vec<u8>, String)>>,
-    routes: Arc<Mutex<HashMap<String, mpsc::Sender<(Vec<u8>, String)>>>>,
+    routes: Routes,
 }
 
 impl Transport for MemTransport {
     fn local_addr(&self) -> String { self.addr.clone() }
 
-    fn recv<'a>(
-        &'a self,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = CelResult<(Vec<u8>, String)>> + Send + 'a>> {
+    fn recv<'a>(&'a self) -> RecvFut<'a> {
         Box::pin(async move {
             let mut rx = self.rx.lock().await;
             rx.recv().await
@@ -105,11 +111,7 @@ impl Transport for MemTransport {
         })
     }
 
-    fn send<'a>(
-        &'a self,
-        peer: &'a str,
-        bytes: &'a [u8],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = CelResult<()>> + Send + 'a>> {
+    fn send<'a>(&'a self, peer: &'a str, bytes: &'a [u8]) -> SendFut<'a> {
         let local = self.addr.clone();
         let payload = bytes.to_vec();
         Box::pin(async move {
@@ -153,9 +155,7 @@ impl Transport for UdpTransport {
             .unwrap_or_else(|_| "udp://?".to_string())
     }
 
-    fn recv<'a>(
-        &'a self,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = CelResult<(Vec<u8>, String)>> + Send + 'a>> {
+    fn recv<'a>(&'a self) -> RecvFut<'a> {
         Box::pin(async move {
             let mut buf = vec![0u8; MAX_FRAME_BYTES];
             let (n, peer) = self.socket.recv_from(&mut buf).await
@@ -165,11 +165,7 @@ impl Transport for UdpTransport {
         })
     }
 
-    fn send<'a>(
-        &'a self,
-        peer: &'a str,
-        bytes: &'a [u8],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = CelResult<()>> + Send + 'a>> {
+    fn send<'a>(&'a self, peer: &'a str, bytes: &'a [u8]) -> SendFut<'a> {
         Box::pin(async move {
             let addr: SocketAddr = peer.parse()
                 .map_err(|_| CelError::Invalid("udp peer addr"))?;

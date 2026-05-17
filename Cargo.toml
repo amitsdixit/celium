@@ -4,6 +4,7 @@ members = [
     "crates/celcommon",
     "crates/celmesh",
     "crates/celvault",
+    "crates/celimage",
     "crates/celcli",
     "crates/celtest",
 ]
@@ -42,6 +43,7 @@ clap        = { version = "4", features = ["derive"] }
 celcommon   = { path = "crates/celcommon" }
 celmesh     = { path = "crates/celmesh" }
 celvault    = { path = "crates/celvault" }
+celimage    = { path = "crates/celimage" }
 
 [profile.release]
 opt-level     = 3

@@ -12,16 +12,32 @@
 
 #![cfg(not(test))]
 
+/// Architectural 64-bit Task State Segment (TSS).
+///
+/// We only populate `rsp0` (used as the stack on a ring-transition
+/// triggered by a VM-exit trampoline) and `iomap_base` (set to
+/// `sizeof(Tss64)` so no I/O permission bitmap is consulted). All
+/// other fields are explicitly zero.
 #[repr(C, packed)]
 pub struct Tss64 {
+    /// Reserved, must be zero.
     _reserved0: u32,
+    /// Stack pointer used on transitions to ring 0.
     rsp0:    u64,
+    /// Stack pointer used on transitions to ring 1 (unused).
     rsp1:    u64,
+    /// Stack pointer used on transitions to ring 2 (unused).
     rsp2:    u64,
+    /// Reserved, must be zero.
     _reserved1:  u64,
+    /// Interrupt-Stack-Table entries 1..=7 (unused).
     ist:     [u64; 7],
+    /// Reserved, must be zero.
     _reserved2:  u64,
+    /// Reserved, must be zero.
     _reserved3:  u16,
+    /// Offset of the I/O permission bitmap from the TSS base. We set
+    /// this to `sizeof(Tss64)` to indicate "no bitmap present".
     iomap_base: u16,
 }
 

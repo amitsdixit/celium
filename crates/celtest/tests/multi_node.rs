@@ -65,6 +65,10 @@ fn mk_vm(owner: &str, id: u32, label: &str) -> RemoteVm {
         owner_alive: true,
         restart_policy: celmesh::RestartPolicy::Never,
         volumes: Vec::new(),
+        image_path: None,
+        cpu_count: None,
+        memory_mib: None,
+        boot_blob_crc32c: None,
     }
 }
 

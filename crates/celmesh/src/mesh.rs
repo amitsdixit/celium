@@ -664,6 +664,31 @@ impl Mesh {
         }
     }
 
+    /// W19: one-line human-readable summary suitable for ops logs
+    /// and the CLI's `cluster status --oneline` form.
+    ///
+    /// Shape: `node=<id> cluster=<n> alive=<a>/<m> suspect=<s>
+    /// dead=<d> vms=<v> orphaned=<o> degraded=<bool>
+    /// gossip=<in>/<out> decode_err=<n> rpc_err=<n>`.
+    /// `degraded` is true when this node sees no other live peers
+    /// (i.e. `alive <= 1`) — useful for alerting on accidental
+    /// single-node operation. The trailing counters (Phase C) make
+    /// transport-level health visible alongside membership health
+    /// without scraping `/metrics`.
+    pub async fn summary(&self) -> String {
+        let s = self.cluster_status().await;
+        let m = self.metrics.snapshot();
+        let total = s.members.len();
+        let degraded = s.alive <= 1;
+        format!(
+            "node={} cluster={} alive={}/{} suspect={} dead={} vms={} orphaned={} \
+             degraded={} gossip={}/{} decode_err={} rpc_err={}",
+            s.self_id, s.cluster, s.alive, total, s.suspect, s.dead,
+            s.total_vms, s.orphaned_vms, degraded,
+            m.gossip_recv, m.gossip_sent, m.decode_errors, m.rpc_errors,
+        )
+    }
+
     // -- internals --------------------------------------------------------
 
     async fn send_hello(&self, peer: &str) -> CelResult<()> {
@@ -1012,6 +1037,10 @@ mod tests {
             owner_alive: true,
             restart_policy: crate::federation::RestartPolicy::Never,
             volumes: Vec::new(),
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         };
         a.publish_local_vms(vec![row]).await.unwrap();
 
@@ -1021,6 +1050,40 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         panic!("vm did not propagate from a to b");
+    }
+
+    #[tokio::test]
+    async fn summary_reports_degraded_for_single_node_and_clears_after_join() {
+        // W19: `Mesh::summary` is the one-line ops view; it must
+        // flag `degraded=true` while only this node is alive and
+        // flip to `degraded=false` once a peer joins.
+        let f = MemTransportFactory::new();
+        let ta = Arc::new(f.bind("mem://sa").await.unwrap());
+        let a = Mesh::start(cfg("sa", "mem://sa", vec![]), ta).await.unwrap();
+
+        let s = a.summary().await;
+        assert!(s.contains("node=sa"), "summary={s}");
+        assert!(s.contains("alive=1/1"), "summary={s}");
+        assert!(s.contains("degraded=true"), "summary={s}");
+        // Phase C: transport counters must always be present.
+        assert!(s.contains("gossip="), "summary={s}");
+        assert!(s.contains("decode_err=0"), "summary={s}");
+        assert!(s.contains("rpc_err=0"), "summary={s}");
+
+        let tb = Arc::new(f.bind("mem://sb").await.unwrap());
+        let b = Mesh::start(cfg("sb", "mem://sb", vec!["mem://sa".into()]), tb).await.unwrap();
+        a.join("mem://sb").await.unwrap();
+
+        for _ in 0..40 {
+            if a.alive_count().await == 2 { break; }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let s = a.summary().await;
+        assert!(s.contains("alive=2/2"), "summary={s}");
+        assert!(s.contains("degraded=false"), "summary={s}");
+        // Gossip should have been observed by now.
+        assert!(!s.contains("gossip=0/0"), "expected non-zero gossip counters: {s}");
+        let _ = b; // keep b alive until summary captured.
     }
 
     #[test]

@@ -1,0 +1,17 @@
+[package]
+name         = "celimage"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+description  = "Celium disk-image readers (raw, qcow2; VMDK/VHDX planned)."
+
+[dependencies]
+celcommon = { workspace = true }
+tracing   = { workspace = true }
+serde     = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

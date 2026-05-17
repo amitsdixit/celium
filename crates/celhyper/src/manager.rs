@@ -137,7 +137,7 @@ pub fn create_vm_with<P: FrameProvider>(
     //    tables — the very state CelLoader handed us. `capture()` only
     //    reads control/segment/MSR state and writes nothing.
     let host = unsafe { host_state::capture() };
-    let host_rip = exit::vmexit_trampoline as usize as u64;
+    let host_rip = exit::vmexit_trampoline as *const () as usize as u64;
     let host_rsp = exit::host_rsp_top();
     host_state::write_host_state(&host, host_rip, host_rsp)?;
 

@@ -66,22 +66,6 @@ pub fn load_celhyper() -> Result<LoadedKernel, LoadError> {
     Ok(LoadedKernel { bytes })
 }
 
-#[must_use]
-pub fn parse_entry_point(bytes: &[u8]) -> Option<u64> {
-    if bytes.len() < 0x20 {
-        return None;
-    }
-    if &bytes[0..4] != b"\x7FELF" {
-        return None;
-    }
-    if bytes[4] != 2 || bytes[5] != 1 {
-        return None;
-    }
-    let mut e = [0u8; 8];
-    e.copy_from_slice(&bytes[0x18..0x20]);
-    Some(u64::from_le_bytes(e))
-}
-
 /// A fully loaded image in memory: PT_LOAD segments copied to their target
 /// VAs (plus a load slide), R_X86_64_RELATIVE relocations applied.
 pub struct RelocatedImage {

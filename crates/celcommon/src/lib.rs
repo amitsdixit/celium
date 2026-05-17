@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms, clippy::pedantic)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![allow(clippy::module_name_repetitions)]
 
 pub mod error;

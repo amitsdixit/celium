@@ -99,6 +99,7 @@ impl Vm {
 // ---- Manager + namespace ---------------------------------------------------
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // `state` retained for debug printout symmetry with the manager.
 struct VmListEntry { id: VmId, state: VmState, last_exit: Option<u32> }
 
 struct Manager {

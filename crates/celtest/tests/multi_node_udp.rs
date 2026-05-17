@@ -162,7 +162,7 @@ async fn udp_auto_supervisor_restarts_orphan() {
     // Wait for the auto-supervisor on n1 to recreate the VM. We
     // probe via federated rows on n3 to keep the assertion at the
     // cluster level rather than reaching into n1 directly.
-    let label_match = format!("phoenix@n2");
+    let label_match = "phoenix@n2".to_string();
     assert!(
         wait_until(|| {
             let n3 = n3.clone();

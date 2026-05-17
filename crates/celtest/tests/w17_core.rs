@@ -113,7 +113,7 @@ async fn mesh_metrics_increment_under_real_traffic() {
 
     // n1 issued at least one outbound RPC.
     assert!(
-        post1.rpc_out >= pre.rpc_out + 1,
+        post1.rpc_out > pre.rpc_out,
         "rpc_out did not advance: pre={} post={}", pre.rpc_out, post1.rpc_out,
     );
     // n2 saw at least one inbound RPC.
@@ -240,7 +240,7 @@ async fn rpc_timeout_returns_celerror_timeout() {
     }
     let post = m1.metrics();
     assert!(
-        post.rpc_timeouts >= pre.rpc_timeouts + 1,
+        post.rpc_timeouts > pre.rpc_timeouts,
         "rpc_timeouts did not advance: pre={} post={}",
         pre.rpc_timeouts, post.rpc_timeouts,
     );

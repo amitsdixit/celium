@@ -23,6 +23,11 @@ pub fn record_to_remote(owner: &NodeId, r: &VmRecord) -> RemoteVm {
         owner_alive: true,
         restart_policy: celmesh::RestartPolicy::Never,
         volumes: Vec::new(),
+        // W18.4: propagate image-aware metadata across the cluster.
+        image_path:       r.image_path.clone(),
+        cpu_count:        r.cpu_count,
+        memory_mib:       r.memory_mib,
+        boot_blob_crc32c: r.boot_blob_crc32c,
     }
 }
 
