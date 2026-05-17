@@ -63,6 +63,13 @@ pub const HYPER_MAX_VMS: usize = 4;
 /// for its in-memory model, so the wire shape stays uniform.
 pub const HYPER_HLT_EXIT_CODE: u32 = 12;
 
+/// W23-E2: maximum bytes that can be shipped in a single
+/// [`HyperRequest::ImageLoad`]. Matches the kernel's
+/// `image_loader::MAX_IMAGE_BYTES` (one 4 KiB page). The cap is
+/// lifted to ~2 MiB in W23-F when the EPT mapper learns to span
+/// multiple pages and the bridge gains chunked image framing.
+pub const MAX_STAGED_IMAGE_BYTES: usize = 4096;
+
 /// Wire types. Public so future kernel-side decoders can pull in the
 /// shape via `celcommon` re-export (W22-B will move them there once
 /// the no_std encoder is in place).
@@ -128,6 +135,25 @@ pub mod wire {
         },
         /// Snapshot every slot the kernel currently knows.
         List,
+        /// W23-E2: stream a raw boot image to the kernel's staging
+        /// area. `bytes_hex` is a lowercase hex encoding of the
+        /// payload (the closed JSON grammar has no binary-safe
+        /// primitive). `len` MUST equal `bytes_hex.len() / 2` and
+        /// MUST be ≤ the kernel's `MAX_IMAGE_BYTES` (4096 today).
+        /// `crc32c` is the Castagnoli CRC32C of the decoded bytes;
+        /// the kernel recomputes it and returns
+        /// [`HyperReply::Error`] on mismatch. A subsequent
+        /// [`HyperRequest::Create`] with `boot_blob_crc32c == Some(crc32c)`
+        /// will boot the staged image instead of the embedded
+        /// HELLO blob.
+        ImageLoad {
+            /// Decoded length in bytes.
+            len: u32,
+            /// Castagnoli CRC32C of the decoded bytes.
+            crc32c: u32,
+            /// Lowercase hex of the payload.
+            bytes_hex: String,
+        },
     }
 
     /// One bridge reply.
@@ -169,6 +195,15 @@ pub mod wire {
         Error {
             /// Short human-readable message from the kernel.
             message: String,
+        },
+        /// W23-E2: ack for [`HyperRequest::ImageLoad`]. Echoes back
+        /// the `len` and `crc32c` the kernel verified so the host
+        /// can assert byte-for-byte agreement with what it sent.
+        ImageLoaded {
+            /// Decoded length the kernel stored.
+            len: u32,
+            /// CRC32C the kernel recomputed (matches request).
+            crc32c: u32,
         },
     }
 
@@ -352,6 +387,49 @@ impl LoopbackHyperLink {
                 }
                 Ok(HyperReply::Listed { rows })
             }
+            HyperRequest::ImageLoad { len, crc32c, bytes_hex } => {
+                // Mirror the kernel's W23-E1 validation surface:
+                //   * hex must be lowercase and even-length,
+                //   * decoded length must equal `len`,
+                //   * `len` must fit the kernel's static staging
+                //     buffer (4 KiB today; same cap as the kernel
+                //     enforces in `image_loader::stage_from_hex`),
+                //   * recomputed CRC32C must equal `crc32c`.
+                // The loopback doesn't actually run the staged
+                // bytes — there's no VMX in-process — but verifying
+                // them lets `LoopbackHyperLink` stand in for the
+                // real bridge in every host-side test.
+                const LOOPBACK_MAX_IMAGE_BYTES: u32 = 4096;
+                if bytes_hex.len() != (len as usize).saturating_mul(2) {
+                    return Err(CelError::Invalid(
+                        "hyper: image_load: bytes_hex.len() != 2*len",
+                    ));
+                }
+                if len == 0 {
+                    return Err(CelError::Invalid("hyper: image_load: len == 0"));
+                }
+                if len > LOOPBACK_MAX_IMAGE_BYTES {
+                    return Err(CelError::Invalid(
+                        "hyper: image_load: len > MAX_IMAGE_BYTES",
+                    ));
+                }
+                let mut decoded = Vec::with_capacity(len as usize);
+                let bytes = bytes_hex.as_bytes();
+                let mut i = 0;
+                while i < bytes.len() {
+                    let hi = hex_nibble(bytes[i])?;
+                    let lo = hex_nibble(bytes[i + 1])?;
+                    decoded.push((hi << 4) | lo);
+                    i += 2;
+                }
+                let actual = crc32c_bytes(&decoded);
+                if actual != crc32c {
+                    return Err(CelError::Invalid(
+                        "hyper: image_load: crc32c mismatch",
+                    ));
+                }
+                Ok(HyperReply::ImageLoaded { len, crc32c })
+            }
         }
     }
 }
@@ -509,6 +587,55 @@ impl CelhyperVmHost {
     /// poke the kernel directly without going through `VmHost`.
     #[must_use]
     pub fn link(&self) -> Arc<dyn HyperLink> { self.link.clone() }
+
+    /// W23-E2: hex-encode `bytes`, compute its CRC32C, ship the
+    /// resulting [`HyperRequest::ImageLoad`] over the link, and
+    /// return the CRC the kernel acknowledged.
+    ///
+    /// On success the kernel has the bytes in its staging slot;
+    /// a follow-up [`VmOp::Create`] with
+    /// `boot_blob_crc32c == Some(returned_crc)` will boot them.
+    /// On any error (oversize, link failure, kernel CRC mismatch)
+    /// the staging slot is left untouched on this side and the
+    /// kernel's `stage_from_hex` wipes its own slot on mismatch.
+    ///
+    /// `bytes.len()` must be in `1..=MAX_STAGED_IMAGE_BYTES`
+    /// (the kernel rejects anything outside that range with
+    /// `HyperError::Invalid`, which surfaces here as
+    /// `Err("hyper: kernel: ...")`).
+    pub async fn stage_image(&self, bytes: &[u8]) -> Result<u32, String> {
+        if bytes.is_empty() {
+            return Err("hyper: stage_image: bytes is empty".to_string());
+        }
+        if bytes.len() > MAX_STAGED_IMAGE_BYTES {
+            return Err(format!(
+                "hyper: stage_image: {} bytes exceeds MAX_STAGED_IMAGE_BYTES ({})",
+                bytes.len(),
+                MAX_STAGED_IMAGE_BYTES
+            ));
+        }
+        let crc = crc32c_bytes(bytes);
+        let bytes_hex = hex_encode(bytes);
+        let len = bytes.len() as u32;
+        let reply = self
+            .link
+            .call(HyperRequest::ImageLoad { len, crc32c: crc, bytes_hex })
+            .await
+            .map_err(|e| format!("hyper: {e:?}"))?;
+        if let HyperReply::Error { ref message } = reply {
+            return Err(format!("hyper: kernel: {message}"));
+        }
+        let HyperReply::ImageLoaded { len: rlen, crc32c: rcrc } = reply else {
+            return Err(format!("hyper: unexpected reply {reply:?}"));
+        };
+        if rlen != len || rcrc != crc {
+            return Err(format!(
+                "hyper: stage_image: kernel echoed (len={rlen}, crc=0x{rcrc:08x}); \
+                 expected (len={len}, crc=0x{crc:08x})"
+            ));
+        }
+        Ok(crc)
+    }
 
     fn remember(&self, vm_id: u32, label: String, policy: RestartPolicy) {
         if let Ok(mut g) = self.labels.lock()   { g.insert(vm_id, label); }
@@ -675,6 +802,44 @@ impl VmHost for CelhyperVmHost {
         // Volumes still live in the fallback; mirror the call.
         self.fallback.attach_preserved(vm_id, attachments)
     }
+}
+
+// ---------------------------------------------------------------------------
+// W23-E2 wire helpers — hex codec + Castagnoli CRC32C (matches the kernel's
+// `celhyper::crc::crc32c` byte-for-byte; same polynomial 0x82F63B78,
+// reflected init/xor-out 0xFFFFFFFF). Kept local to `hyper_host` so
+// `celmesh` doesn't pull in `celimage` as a dependency just for this.
+// ---------------------------------------------------------------------------
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(LUT[(b >> 4) as usize] as char);
+        out.push(LUT[(b & 0x0F) as usize] as char);
+    }
+    out
+}
+
+fn hex_nibble(b: u8) -> CelResult<u8> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(10 + (b - b'a')),
+        _ => Err(CelError::Invalid("hyper: image_load: non-hex byte (lowercase required)")),
+    }
+}
+
+fn crc32c_bytes(data: &[u8]) -> u32 {
+    let mut state: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        state ^= u32::from(b);
+        let mut i = 0;
+        while i < 8 {
+            state = if state & 1 != 0 { (state >> 1) ^ 0x82F6_3B78 } else { state >> 1 };
+            i += 1;
+        }
+    }
+    state ^ 0xFFFF_FFFF
 }
 
 #[cfg(test)]
@@ -882,5 +1047,116 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(r, VmOpReply::VolumeCreated { .. }));
+    }
+
+    // ---------------------------------------------------------------
+    // W23-E2: ImageLoad / stage_image
+    // ---------------------------------------------------------------
+
+    /// Sanity check that this crate's `crc32c_bytes` agrees with the
+    /// industry-standard CRC32C/Castagnoli check vector. The same
+    /// vector is asserted by the kernel-side `celhyper::crc` module
+    /// — if either drifts the bridge falls apart silently.
+    #[test]
+    fn crc32c_matches_known_vector() {
+        assert_eq!(crc32c_bytes(b""), 0);
+        assert_eq!(crc32c_bytes(b"123456789"), 0xe306_9283);
+    }
+
+    #[test]
+    fn hex_encode_round_trips() {
+        let raw: &[u8] = &[0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0xFF];
+        let hex = hex_encode(raw);
+        assert_eq!(hex, "00deadbeefff");
+        // Round-trip via the same nibble decoder LoopbackHyperLink uses.
+        let bytes = hex.as_bytes();
+        let mut out = Vec::with_capacity(raw.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let hi = hex_nibble(bytes[i]).unwrap();
+            let lo = hex_nibble(bytes[i + 1]).unwrap();
+            out.push((hi << 4) | lo);
+            i += 2;
+        }
+        assert_eq!(out, raw);
+    }
+
+    #[tokio::test]
+    async fn stage_image_round_trips_through_loopback() {
+        let host = CelhyperVmHost::new(link());
+        let payload: Vec<u8> = (0u32..256).map(|i| (i * 7) as u8).collect();
+        let crc = host.stage_image(&payload).await.expect("stage_image ok");
+        assert_eq!(crc, crc32c_bytes(&payload));
+    }
+
+    #[tokio::test]
+    async fn stage_image_rejects_empty() {
+        let host = CelhyperVmHost::new(link());
+        let err = host.stage_image(&[]).await.expect_err("empty must fail");
+        assert!(err.contains("empty"), "err={err}");
+    }
+
+    #[tokio::test]
+    async fn stage_image_rejects_oversize() {
+        let host = CelhyperVmHost::new(link());
+        let payload = vec![0xAA; MAX_STAGED_IMAGE_BYTES + 1];
+        let err = host.stage_image(&payload).await.expect_err("oversize must fail");
+        assert!(err.contains("MAX_STAGED_IMAGE_BYTES"), "err={err}");
+    }
+
+    #[tokio::test]
+    async fn loopback_image_load_rejects_crc_mismatch() {
+        let link = LoopbackHyperLink::new();
+        let bytes = b"abcdef".to_vec();
+        let bad_crc = crc32c_bytes(&bytes).wrapping_add(1);
+        let err = link
+            .apply(HyperRequest::ImageLoad {
+                len: bytes.len() as u32,
+                crc32c: bad_crc,
+                bytes_hex: hex_encode(&bytes),
+            })
+            .expect_err("crc mismatch must fail");
+        match err {
+            CelError::Invalid(msg) => assert!(msg.contains("crc32c"), "msg={msg}"),
+            other => panic!("expected CelError::Invalid, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn loopback_image_load_rejects_length_mismatch() {
+        let link = LoopbackHyperLink::new();
+        let bytes = b"abcd".to_vec();
+        let err = link
+            .apply(HyperRequest::ImageLoad {
+                len: 99, // lies
+                crc32c: crc32c_bytes(&bytes),
+                bytes_hex: hex_encode(&bytes),
+            })
+            .expect_err("len mismatch must fail");
+        assert!(matches!(err, CelError::Invalid(_)));
+    }
+
+    /// The full serde round-trip exercises both new wire variants
+    /// over the same JSON encoder/decoder that `SerialHyperLink` uses
+    /// in production. If anything drifts (variant name, field order,
+    /// missing `#[serde]` attribute) this catches it before a real
+    /// kernel does.
+    #[test]
+    fn image_load_serde_round_trip() {
+        let req = HyperRequest::ImageLoad {
+            len: 4,
+            crc32c: 0xDEAD_BEEF,
+            bytes_hex: "deadbeef".to_string(),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"op\":\"image_load\""), "encoded: {s}");
+        let back: HyperRequest = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, req);
+
+        let reply = HyperReply::ImageLoaded { len: 4, crc32c: 0xDEAD_BEEF };
+        let s = serde_json::to_string(&reply).unwrap();
+        assert!(s.contains("\"reply\":\"image_loaded\""), "encoded: {s}");
+        let back: HyperReply = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, reply);
     }
 }
