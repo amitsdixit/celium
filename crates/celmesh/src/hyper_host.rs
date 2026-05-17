@@ -161,6 +161,15 @@ pub mod wire {
             /// Every slot the kernel currently holds.
             rows: Vec<HyperVmRow>,
         },
+        /// W23-C: kernel-side dispatch (or decode) error. The bridge
+        /// emits this in place of `Created`/`State`/`Deleted`/`Listed`
+        /// when [`crate::error::HyperError`] propagates out of its
+        /// dispatch handler, so the host's `call()` can fail fast with
+        /// the kernel's reason string instead of timing out.
+        Error {
+            /// Short human-readable message from the kernel.
+            message: String,
+        },
     }
 
     /// One row in [`HyperReply::Listed`].
@@ -541,6 +550,9 @@ impl VmHost for CelhyperVmHost {
                         })
                         .await
                         .map_err(|e| format!("hyper: {e:?}"))?;
+                    if let HyperReply::Error { ref message } = reply {
+                        return Err(format!("hyper: kernel: {message}"));
+                    }
                     let HyperReply::Created { vm_id } = reply else {
                         return Err(format!("hyper: unexpected reply {reply:?}"));
                     };
@@ -553,6 +565,9 @@ impl VmHost for CelhyperVmHost {
                         .call(HyperRequest::Start { vm_id })
                         .await
                         .map_err(|e| format!("hyper: {e:?}"))?;
+                    if let HyperReply::Error { ref message } = reply {
+                        return Err(format!("hyper: kernel: {message}"));
+                    }
                     let HyperReply::State { vm_id, state, .. } = reply else {
                         return Err(format!("hyper: unexpected reply {reply:?}"));
                     };
@@ -564,6 +579,9 @@ impl VmHost for CelhyperVmHost {
                         .call(HyperRequest::Stop { vm_id })
                         .await
                         .map_err(|e| format!("hyper: {e:?}"))?;
+                    if let HyperReply::Error { ref message } = reply {
+                        return Err(format!("hyper: kernel: {message}"));
+                    }
                     let HyperReply::State { vm_id, state, .. } = reply else {
                         return Err(format!("hyper: unexpected reply {reply:?}"));
                     };
@@ -575,6 +593,9 @@ impl VmHost for CelhyperVmHost {
                         .call(HyperRequest::Delete { vm_id })
                         .await
                         .map_err(|e| format!("hyper: {e:?}"))?;
+                    if let HyperReply::Error { ref message } = reply {
+                        return Err(format!("hyper: kernel: {message}"));
+                    }
                     let HyperReply::Deleted { vm_id } = reply else {
                         return Err(format!("hyper: unexpected reply {reply:?}"));
                     };

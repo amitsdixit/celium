@@ -30,7 +30,7 @@ use crate::manager;
 use crate::serial_io;
 use crate::vm::{VmId, VmState};
 use crate::wire::{
-    decode_request, encode_reply, ImagePathBuf, LabelBuf, Reply, Request, Row, StateTag,
+    decode_request, encode_reply, ErrorBuf, ImagePathBuf, LabelBuf, Reply, Request, Row, StateTag,
     IMAGE_PATH_MAX, LABEL_MAX, ROWS_MAX,
 };
 
@@ -92,15 +92,32 @@ pub fn run() -> ! {
         let req = match decode_request(frame) {
             Ok(r) => r,
             Err(e) => {
+                // The host sent us bytes it expects a reply for —
+                // surface a structured error so its `call()` doesn't
+                // time out. The session continues; this is *not* a
+                // teardown.
                 log_err("bridge: decode", &e);
+                let err_reply = Reply::Error {
+                    message: ErrorBuf::from_slice_truncating(error_message(&e)),
+                };
+                match encode_reply(&err_reply, unsafe { &mut TX_BUF[..] }) {
+                    Ok(n) => serial_io::write_all(unsafe { &TX_BUF[..n] }),
+                    Err(ee) => log_err("bridge: encode-of-decode-err", &ee),
+                }
                 continue;
             }
         };
         let reply = match dispatch(req) {
             Ok(r) => r,
             Err(e) => {
+                // W23-B: surface dispatch errors as a structured
+                // `Reply::Error` instead of silently dropping the
+                // call. Without this the host SerialHyperLink would
+                // time out after `CALL_TIMEOUT` (1s) every time the
+                // kernel rejected an op (e.g. Delete on a non-
+                // terminal VM), with no diagnostic.
                 log_err("bridge: dispatch", &e);
-                continue;
+                Reply::Error { message: ErrorBuf::from_slice_truncating(error_message(&e)) }
             }
         };
         // SAFETY: same as above.
@@ -298,4 +315,25 @@ fn log_err(prefix: &str, e: &HyperError) {
     };
     crate::logger::log(prefix);
     crate::logger::log(msg);
+}
+
+/// Map a [`HyperError`] to the wire-side `"kind: payload"` byte
+/// slice used in `Reply::Error`. Lives in the kernel because we
+/// don't have `format!` available; the kind tags are static.
+fn error_message(e: &HyperError) -> &'static [u8] {
+    // We can't allocate a "kind: payload" string in `no_std` without
+    // an allocator, so the payload alone is the message. Hosts log
+    // it as `hyper: kernel: <payload>` which is sufficient for
+    // operator-facing diagnostics.
+    let msg = match e {
+        HyperError::InvalidHandoff(m)
+        | HyperError::UnsupportedCpu(m)
+        | HyperError::Hardware(m)
+        | HyperError::Exhausted(m)
+        | HyperError::Denied(m)
+        | HyperError::Invalid(m)
+        | HyperError::Unimplemented(m)
+        | HyperError::Internal(m) => *m,
+    };
+    msg.as_bytes()
 }

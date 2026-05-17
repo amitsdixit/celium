@@ -139,3 +139,116 @@ async fn live_qemu_bridge_lists_bringup_vms() {
         "unexpected Delete reply: {del:?}",
     );
 }
+
+/// W23-B regression: prove the new wire fields (`image_path`,
+/// `cpu_count`, `memory_mib`, `boot_blob_crc32c`) round-trip
+/// through the *live* kernel — i.e. the bridge's request decoder
+/// reads them, the EXTRAS side-table stores them, and the next
+/// snapshot encoder emits them so the host sees identical values
+/// echoed back.
+#[tokio::test]
+#[ignore = "requires a running QEMU+CelHyper with COM2 -> TCP (see file header)"]
+async fn live_qemu_bridge_round_trips_w23b_metadata() {
+    let Some(addr) = bridge_addr() else {
+        panic!("CELIUM_BRIDGE_TCP unset; see header for usage");
+    };
+
+    // Same connect-with-retry pattern as the sibling test.
+    let link = {
+        let mut last_err = None;
+        let mut sock = None;
+        for _ in 0..50 {
+            match SerialHyperLink::connect(addr.as_str()).await {
+                Ok(s) => {
+                    sock = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+        match sock {
+            Some(s) => Arc::new(s),
+            None => panic!("connect {addr} failed: {last_err:?}"),
+        }
+    };
+
+    let host: Arc<dyn VmHost> = Arc::new(CelhyperVmHost::new(link));
+    let owner: NodeId = "qemu-host".into();
+
+    // Settle: wait until the bring-up rows are visible (same as
+    // the sibling test). Avoids racing the kernel's startup.
+    let mut snap = host.snapshot(&owner).await;
+    for _ in 0..150 {
+        if snap.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        snap = host.snapshot(&owner).await;
+    }
+    assert!(
+        snap.len() >= 2,
+        "bring-up rows missing before W23-B metadata test: {snap:?}",
+    );
+
+    // Create a VM with every W23-B field populated.
+    let want_image = "/golden/w23b-payload.raw".to_string();
+    let want_cpu: u32 = 4;
+    let want_mem: u64 = 512;
+    let want_crc: u32 = 0xDEAD_BEEF;
+
+    let r = host
+        .handle(VmOp::Create {
+            label: "w23b-meta".into(),
+            restart_policy: celmesh::RestartPolicy::Never,
+            image_path: Some(want_image.clone()),
+            cpu_count: Some(want_cpu),
+            memory_mib: Some(want_mem),
+            boot_blob_crc32c: Some(want_crc),
+        })
+        .await
+        .expect("Create with metadata through live bridge");
+    let id = match r {
+        VmOpReply::Created { vm_id } => vm_id,
+        other => panic!("unexpected Create reply: {other:?}"),
+    };
+    eprintln!("w23b: created vm {id} with metadata; sampling snapshot...");
+
+    // The kernel encoder must echo every populated field back.
+    let snap2 = host.snapshot(&owner).await;
+    let row = snap2
+        .iter()
+        .find(|v| v.vm_id == id)
+        .unwrap_or_else(|| panic!("fresh vm {id} missing from snapshot {snap2:?}"));
+
+    assert_eq!(row.image_path.as_deref(), Some(want_image.as_str()),
+        "kernel did not echo image_path: {row:?}");
+    assert_eq!(row.cpu_count, Some(want_cpu),
+        "kernel did not echo cpu_count: {row:?}");
+    assert_eq!(row.memory_mib, Some(want_mem),
+        "kernel did not echo memory_mib: {row:?}");
+    assert_eq!(row.boot_blob_crc32c, Some(want_crc),
+        "kernel did not echo boot_blob_crc32c: {row:?}");
+
+    // Drive the VM to a terminal state before Delete — the kernel
+    // rejects Delete on a freshly-Created (non-terminal) slot with
+    // `Invalid("manager: vm not terminal")`. Start runs the canned
+    // bring-up template and HLTs, leaving the slot Halted.
+    let started = host
+        .handle(VmOp::Start { vm_id: id })
+        .await
+        .expect("Start through live bridge");
+    eprintln!("w23b-meta: start reply for vm {id} = {started:?}");
+
+    // Cleanup.
+    let del = host
+        .handle(VmOp::Delete { vm_id: id })
+        .await
+        .expect("Delete through live bridge");
+    assert!(
+        matches!(del, VmOpReply::Deleted { vm_id } if vm_id == id),
+        "unexpected Delete reply: {del:?}",
+    );
+}

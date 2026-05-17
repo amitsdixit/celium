@@ -30,6 +30,10 @@
 //!   — `last_exit` is omitted when `None`.
 //! * `{"reply":"deleted","vm_id":N}`
 //! * `{"reply":"listed","rows":[{...},...]}`
+//! * `{"reply":"error","message":"..."}`
+//!   — emitted whenever the bridge's `dispatch` returns a
+//!   [`HyperError`]. Message is ASCII-only, ≤ [`ERROR_MSG_MAX`], and
+//!   `"`/`\` are JSON-escaped on encode.
 //!
 //! # Why a hand-rolled JSON parser is acceptable
 //!
@@ -56,6 +60,12 @@ pub const LABEL_MAX: usize = 32;
 /// bridge side-table is `ROWS_MAX * IMAGE_PATH_MAX` bytes — small
 /// enough that the buffers live in `.bss` rather than the heap.
 pub const IMAGE_PATH_MAX: usize = 128;
+
+/// Maximum length, in bytes, of a `Reply::Error` message after the
+/// `"kind: "` prefix. Sized to comfortably hold every static
+/// [`HyperError`] payload (the longest is around 40 chars) plus the
+/// kind tag, with headroom.
+pub const ERROR_MSG_MAX: usize = 96;
 
 /// Maximum number of VM rows in one [`Reply::Listed`].
 ///
@@ -137,6 +147,13 @@ pub enum Reply {
     Listed {
         /// Live rows (only `len` are valid).
         rows: [Option<Row>; ROWS_MAX],
+    },
+    /// Emitted when [`crate::bridge::dispatch`] returned an error.
+    /// Conveys a short human-readable message to the host so it
+    /// can surface it to the operator instead of timing out.
+    Error {
+        /// Short ASCII message. Truncated to [`ERROR_MSG_MAX`].
+        message: ErrorBuf,
     },
 }
 
@@ -271,6 +288,44 @@ impl ImagePathBuf {
     /// `true` if the buffer carries no path (the wire sentinel).
     #[must_use]
     pub const fn is_empty(&self) -> bool { self.len == 0 }
+}
+
+/// Fixed-size error-message buffer carried by [`Reply::Error`].
+/// Sized for the kernel's static error strings; longer payloads are
+/// truncated at the encoder boundary so the bridge can always emit
+/// *some* diagnostic rather than dropping the reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorBuf {
+    /// Bytes; only the first `len` are valid.
+    pub bytes: [u8; ERROR_MSG_MAX],
+    /// Valid prefix length.
+    pub len: u8,
+}
+
+impl ErrorBuf {
+    /// Empty buffer.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { bytes: [0; ERROR_MSG_MAX], len: 0 }
+    }
+
+    /// Copy at most [`ERROR_MSG_MAX`] bytes of `src` into a fresh
+    /// buffer. Longer inputs are silently truncated — diagnostic
+    /// fidelity is best-effort, never a correctness signal.
+    #[must_use]
+    pub fn from_slice_truncating(src: &[u8]) -> Self {
+        let n = if src.len() > ERROR_MSG_MAX { ERROR_MSG_MAX } else { src.len() };
+        let mut out = Self::empty();
+        out.bytes[..n].copy_from_slice(&src[..n]);
+        out.len = n as u8;
+        out
+    }
+
+    /// Valid portion of the buffer.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +524,26 @@ pub fn encode_reply(reply: &Reply, out: &mut [u8]) -> HyperResult<usize> {
                 w.put_u8(b'}')?;
             }
             w.put_str(b"]}")?;
+        }
+        Reply::Error { message } => {
+            w.put_str(br#"{"reply":"error","message":""#)?;
+            // Defensively JSON-escape `"` and `\` so any future
+            // non-static error string can't break the framing. The
+            // kernel produces only ASCII errors today but the
+            // encoder must remain robust.
+            for &b in message.as_slice() {
+                match b {
+                    b'"'  => w.put_str(b"\\\"")?,
+                    b'\\' => w.put_str(b"\\\\")?,
+                    // Control bytes are dropped rather than escaped:
+                    // the kernel's static error strings never contain
+                    // any, and escaping them would balloon the worst
+                    // case past `ERROR_MSG_MAX`.
+                    0x00..=0x1F => {}
+                    _ => w.put_u8(b)?,
+                }
+            }
+            w.put_str(b"\"}")?;
         }
     }
     w.put_u8(b'\n')?;
@@ -884,6 +959,34 @@ mod tests {
         assert!(matches!(err, HyperError::Exhausted(_)));
     }
 
+    #[test]
+    fn encode_reply_error_round_trip() {
+        let msg = ErrorBuf::from_slice_truncating(b"manager: vm not terminal");
+        let mut buf = [0u8; 128];
+        let n = encode_reply(&Reply::Error { message: msg }, &mut buf).unwrap();
+        let line = core::str::from_utf8(&buf[..n]).unwrap();
+        assert_eq!(
+            line,
+            "{\"reply\":\"error\",\"message\":\"manager: vm not terminal\"}\n",
+        );
+    }
+
+    #[test]
+    fn encode_reply_error_escapes_quote_and_backslash() {
+        let msg = ErrorBuf::from_slice_truncating(br#"bad "quoted" \ slash"#);
+        let mut buf = [0u8; 128];
+        let n = encode_reply(&Reply::Error { message: msg }, &mut buf).unwrap();
+        let line = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(line.contains(r#""bad \"quoted\" \\ slash""#), "line={line}");
+    }
+
+    #[test]
+    fn error_buf_truncates_overlong_input() {
+        let huge = [b'x'; 200];
+        let b = ErrorBuf::from_slice_truncating(&huge);
+        assert_eq!(b.as_slice().len(), ERROR_MSG_MAX);
+    }
+
     /// Byte-for-byte compatibility with the host serde_json encoder.
     /// Locks the wire shape between celhyper (kernel) and celmesh (host).
     #[test]
@@ -912,6 +1015,12 @@ mod tests {
             (
                 Reply::Deleted { vm_id: 3 },
                 r#"{"reply":"deleted","vm_id":3}"#,
+            ),
+            (
+                Reply::Error {
+                    message: ErrorBuf::from_slice_truncating(b"denied: capability missing"),
+                },
+                r#"{"reply":"error","message":"denied: capability missing"}"#,
             ),
         ];
         for (reply, expected) in cases {

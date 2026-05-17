@@ -76,7 +76,11 @@ export CARGO_HOME=/mnt/data/cargo
 export CARGO_TARGET_DIR=/mnt/data/target/celium
 export CELIUM_BRIDGE_TCP="127.0.0.1:${PORT}"
 set +e
-cargo test -p celtest --test w23_qemu_bridge -- --ignored --nocapture 2>&1 | tee /tmp/w23_test.log
+# Serialize the ignored tests: they share a single QEMU+kernel
+# process whose bridge has no per-conn isolation, so parallel
+# Create/Delete from different test threads race over the same
+# VM slots and request ordering on the COM2 stream.
+cargo test -p celtest --test w23_qemu_bridge -- --ignored --nocapture --test-threads=1 2>&1 | tee /tmp/w23_test.log
 TEST_RC=${PIPESTATUS[0]}
 set -e
 
