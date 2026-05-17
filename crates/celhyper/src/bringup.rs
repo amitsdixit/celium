@@ -64,6 +64,32 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
     unsafe { crate::host_gdt::install(); }
     logger::log("celhyper: host gdt+tss installed");
 
+    // 2b. W24-B: read the SMP topology from the handoff and register
+    //     the BSP. AP bring-up is gated behind `smp::bring_up_aps`
+    //     which currently returns `Unimplemented(W25)` — we surface
+    //     that as a log line rather than failing the whole boot so a
+    //     multi-CPU box still runs single-CPU until W25.
+    match crate::smp::Topology::from_handoff(handoff) {
+        Ok(topology) => {
+            logger::log_kv("smp_cpu_count", u64::from(topology.cpu_count));
+            logger::log_kv("smp_bsp_apic_id", u64::from(topology.bsp_apic_id));
+            if let Err(e) = crate::smp::mark_bsp_online(&topology) {
+                logger::log("celhyper: smp: failed to mark BSP online");
+                let _ = e;
+            }
+            if topology.cpu_count > 1 {
+                if let Err(e) = crate::smp::bring_up_aps(&topology) {
+                    logger::log("celhyper: smp: AP bring-up deferred (W25)");
+                    let _ = e;
+                }
+            }
+        }
+        Err(e) => {
+            logger::log("celhyper: smp: handoff topology invalid; running as single CPU");
+            let _ = e;
+        }
+    }
+
     // 3. Create two VMs from the W23-D boot-image source. The image
     //    source is "handoff-staged if CelLoader supplied one, else
     //    the built-in HELLO_BLOB". Bringup never branches on the

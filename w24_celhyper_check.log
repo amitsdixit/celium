@@ -1,0 +1,7 @@
+    Checking volatile v0.4.6
+    Checking bit_field v0.10.3
+    Checking bitflags v2.11.1
+    Checking spin v0.9.8
+    Checking x86_64 v0.15.4
+    Checking celhyper v0.1.0 (C:\Users\amdix\projects\celium\crates\celhyper)
+    Finished `release` profile [optimized + debuginfo] target(s) in 18.67s

@@ -48,17 +48,20 @@ mkfs.fat -F 12 -n CELIUM "$ESP_IMG" >/dev/null
 mcopy -i "$ESP_IMG" -s "$ESP_DIR"/* ::/
 
 # Stage 2 — wrap the FAT image in an El Torito ISO9660 that any
-# EFI firmware can boot via `-cdrom`.
-echo "[w23-d-iso] building ISO9660 wrapper..."
+# EFI firmware can boot via `-cdrom`. W24-E: also emit an isohybrid
+# GPT signature so the same artefact `dd`s cleanly to a USB stick.
+echo "[w24-e-iso] building hybrid ISO9660 wrapper..."
 xorriso -as mkisofs \
   -V 'CELIUM' \
   -e celium-esp.img \
   -no-emul-boot \
+  -isohybrid-gpt-basdat \
   -o "$ISO_OUT" \
   -graft-points "celium-esp.img=$ESP_IMG" \
   >/dev/null
 
-echo "[w23-d-iso] wrote $ISO_OUT ($(du -h "$ISO_OUT" | awk '{print $1}'))"
+echo "[w24-e-iso] wrote $ISO_OUT ($(du -h "$ISO_OUT" | awk '{print $1}'))"
+echo "[w24-e-iso] hybrid image — bootable as both ISO9660 and dd-able to USB."
 
 if [[ "${1:-}" == "smoke" ]]; then
   : "${QEMU:=qemu-system-x86_64}"

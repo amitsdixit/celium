@@ -42,13 +42,15 @@ pub struct ProbeError;
 
 /// Read CPUID leaves 0/1/0x8000_0001 and assemble a [`CpuFacts`].
 pub fn probe_cpu() -> Result<CpuFacts, ProbeError> {
-    // NOTE: in current Rust `__cpuid` is callable from safe code on
-    // x86_64 because the instruction is unconditionally available in
-    // long mode (which UEFI guarantees on our target). No `unsafe`
-    // block is required.
-    let leaf0 = __cpuid(0);
-    let leaf1 = __cpuid(1);
-    let ext1  = __cpuid(0x8000_0001);
+    // `__cpuid` was once callable from safe code in long mode; current
+    // Rust treats every x86 intrinsic as `unsafe`. The instruction is
+    // unconditionally available at CPL 0 under UEFI, so the block is a
+    // typing concession, not a soundness one.
+    // SAFETY: x86_64 long mode (UEFI guarantee) — CPUID with these
+    // leaves is always defined; no memory is read or written.
+    let (leaf0, leaf1, ext1) = unsafe {
+        (__cpuid(0), __cpuid(1), __cpuid(0x8000_0001))
+    };
 
     let mut vendor = [0u8; 12];
     vendor[0..4].copy_from_slice(&leaf0.ebx.to_le_bytes());

@@ -33,6 +33,7 @@
 #![cfg(not(test))]
 
 pub mod virtio_blk;
+pub mod virtio_net;
 
 use crate::error::HyperResult;
 
@@ -67,4 +68,19 @@ pub trait BlockDevice {
     /// Write `src.len() / SECTOR_BYTES` sectors starting at LBA `lba`.
     /// `src` MUST be `SECTOR_BYTES`-aligned in length.
     fn write_sectors(&self, lba: u64, src: &[u8]) -> HyperResult<()>;
+
+    /// Flush any outstanding writes to durable media. Default impl is
+    /// a no-op so drivers without a write-back cache need not override
+    /// it. Errors propagate to the caller — they are never silently
+    /// swallowed.
+    fn flush(&self) -> HyperResult<()> {
+        Ok(())
+    }
+
+    /// Whether the device is currently usable. Skeletons / un-probed
+    /// instances return `false`; this lets a caller distinguish
+    /// "device present but unimplemented" from "device missing".
+    fn is_ready(&self) -> bool {
+        false
+    }
 }

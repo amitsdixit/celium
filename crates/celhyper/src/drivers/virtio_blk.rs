@@ -76,31 +76,72 @@ pub mod mmio {
 /// it's ready to start submitting requests.
 pub const DEVICE_STATUS_DRIVER_OK: u8 = 0x04;
 
-/// Skeleton driver instance. W23-F will replace the `_phantom` field
-/// with real ownership of the MMIO window, queue allocations, and
-/// MSI-X vectors.
+/// Virtio-blk request type tags (Virtio v1.2 §5.2.6.2).
+pub mod req_type {
+    /// Read sectors from device into guest memory.
+    pub const IN:    u32 = 0;
+    /// Write sectors from guest memory to device.
+    pub const OUT:   u32 = 1;
+    /// Flush the device write-back cache.
+    pub const FLUSH: u32 = 4;
+}
+
+/// Maximum in-flight requests the W25 driver will keep on the
+/// virtqueue. Pinned here so the request-tracker allocator is bounded
+/// at compile time; an actual `submit()` that exceeds this returns
+/// [`HyperError::Exhausted`] rather than blocking.
+pub const MAX_INFLIGHT: usize = 16;
+
+/// Wire-shape of a virtio-blk request header (Virtio v1.2 §5.2.6.2).
+/// Kept as a typed POD so the W25 implementation can fill it in
+/// without inventing the layout from scratch.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VirtioBlkReqHeader {
+    /// One of [`req_type::IN`] / [`req_type::OUT`] / [`req_type::FLUSH`].
+    pub req_type: u32,
+    /// Reserved priority field; must be `0` for modern transport.
+    pub reserved: u32,
+    /// Starting LBA. Sector size is fixed at [`SECTOR_BYTES`].
+    pub sector: u64,
+}
+
+/// Skeleton driver instance. W25 will replace the simple `sectors`
+/// field with real ownership of the MMIO window, queue allocations,
+/// MSI-X vectors, and an in-flight request tracker capped at
+/// [`MAX_INFLIGHT`].
 #[derive(Debug)]
 pub struct VirtioBlk {
     /// Total sectors reported by the device on probe. `0` in the
-    /// W23-D skeleton because we never probe.
+    /// skeleton because we never probe.
     sectors: u64,
+    /// `true` once `probe_pci()` succeeds. Always `false` today.
+    ready: bool,
 }
 
 impl VirtioBlk {
     /// Construct the skeleton driver. Real probing is deferred.
     #[must_use]
     pub const fn skeleton() -> Self {
-        Self { sectors: 0 }
+        Self { sectors: 0, ready: false }
     }
 
-    /// Probe the PCI bus for a virtio-blk device.
-    ///
-    /// W23-D returns [`HyperError::Unimplemented`]: the kernel has no
-    /// PCI scanner yet. W23-F implements this.
+    /// Probe the PCI bus for a virtio-blk device. Deferred to W25.
     pub fn probe_pci() -> HyperResult<Self> {
         Err(HyperError::Unimplemented(
-            "virtio_blk: PCI probe not implemented (W23-F)",
+            "virtio_blk: PCI probe not implemented (W25)",
         ))
+    }
+
+    /// Build a request header for the W25 submit path. Validates the
+    /// shape today so the typed-TODO returns a meaningful error to a
+    /// caller that prematurely tries to drive the device.
+    pub fn build_header(req_type: u32, sector: u64) -> HyperResult<VirtioBlkReqHeader> {
+        match req_type {
+            req_type::IN | req_type::OUT | req_type::FLUSH => {}
+            _ => return Err(HyperError::Invalid("virtio_blk: bad req_type")),
+        }
+        Ok(VirtioBlkReqHeader { req_type, reserved: 0, sector })
     }
 }
 
@@ -110,20 +151,43 @@ impl BlockDevice for VirtioBlk {
     fn sector_count(&self) -> u64 { self.sectors }
 
     fn read_sectors(&self, _lba: u64, dst: &mut [u8]) -> HyperResult<()> {
+        if dst.is_empty() {
+            return Err(HyperError::Invalid("virtio_blk: empty read buffer"));
+        }
         if dst.len() % SECTOR_BYTES != 0 {
             return Err(HyperError::Invalid("virtio_blk: read len % 512 != 0"));
         }
+        if !self.ready {
+            return Err(HyperError::Denied("virtio_blk: device not ready"));
+        }
         Err(HyperError::Unimplemented(
-            "virtio_blk: read_sectors not implemented (W23-F)",
+            "virtio_blk: read_sectors not implemented (W25)",
         ))
     }
 
     fn write_sectors(&self, _lba: u64, src: &[u8]) -> HyperResult<()> {
+        if src.is_empty() {
+            return Err(HyperError::Invalid("virtio_blk: empty write buffer"));
+        }
         if src.len() % SECTOR_BYTES != 0 {
             return Err(HyperError::Invalid("virtio_blk: write len % 512 != 0"));
         }
+        if !self.ready {
+            return Err(HyperError::Denied("virtio_blk: device not ready"));
+        }
         Err(HyperError::Unimplemented(
-            "virtio_blk: write_sectors not implemented (W23-F)",
+            "virtio_blk: write_sectors not implemented (W25)",
         ))
     }
+
+    fn flush(&self) -> HyperResult<()> {
+        if !self.ready {
+            return Err(HyperError::Denied("virtio_blk: device not ready"));
+        }
+        Err(HyperError::Unimplemented(
+            "virtio_blk: flush not implemented (W25)",
+        ))
+    }
+
+    fn is_ready(&self) -> bool { self.ready }
 }

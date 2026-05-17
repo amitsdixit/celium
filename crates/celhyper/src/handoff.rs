@@ -16,7 +16,37 @@ pub const MAGIC: u64 = u64::from_le_bytes(*b"CELIUM\0\0");
 /// * v2 (W23-D): adds `boot_image_phys` / `boot_image_len` /
 ///   `boot_image_crc32c`. Zero in all three means "no image staged";
 ///   the kernel then loads its built-in `HELLO_BLOB`.
-pub const VERSION: u32 = 2;
+/// * v3 (W24-A): adds SMP topology (`cpu_count`, `bsp_apic_id`,
+///   `ap_apic_ids_phys`) and an optional GOP linear framebuffer block
+///   (`fb_phys`, `fb_width`, `fb_height`, `fb_pitch`, `fb_format`).
+///   New fields default to zero; the kernel treats that as "single
+///   CPU, text-only console".
+pub const VERSION: u32 = 3;
+
+/// Framebuffer pixel format. Mirror of `celloader::handoff::FbFormat`.
+#[allow(missing_docs)]
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbFormat {
+    Unknown = 0,
+    Bgra8   = 1,
+    Rgba8   = 2,
+}
+
+impl FbFormat {
+    /// Convert the raw u32 we received from the handoff block back into
+    /// a typed `FbFormat`. Unknown values map to [`FbFormat::Unknown`]
+    /// rather than producing an error — the framebuffer is purely
+    /// optional and an unknown tag just means "don't draw".
+    #[must_use]
+    pub const fn from_raw(raw: u32) -> Self {
+        match raw {
+            1 => Self::Bgra8,
+            2 => Self::Rgba8,
+            _ => Self::Unknown,
+        }
+    }
+}
 
 /// Subset of CPUID facts collected by stage-0. Layout matches
 /// `celloader::hardware::CpuFacts` byte-for-byte.
@@ -67,6 +97,33 @@ pub struct CeliumHandoff {
     pub boot_image_crc32c: u32,
     /// Reserved, must be zero.
     pub _pad2: u32,
+
+    // ---- v3 (W24-A): SMP topology + framebuffer ----
+
+    /// Total logical CPUs detected via ACPI MADT (or `1` for
+    /// "BSP only / unknown"). When `>1`, CelHyper enables
+    /// [`crate::smp`] and issues INIT-SIPI-SIPI to the APs listed in
+    /// `ap_apic_ids_phys`.
+    pub cpu_count: u32,
+    /// LAPIC id of the bootstrap processor. Sanity-checked against the
+    /// running CPU's APIC id by [`crate::smp::self_check`].
+    pub bsp_apic_id: u32,
+    /// Physical address of an array of `u32` APIC ids for the
+    /// application processors. Length is `cpu_count - 1`; `0` when
+    /// `cpu_count <= 1`. The kernel treats the array as read-only.
+    pub ap_apic_ids_phys: u64,
+
+    /// Physical address of the GOP linear framebuffer, or `0` when
+    /// CelLoader did not negotiate a graphics console.
+    pub fb_phys: u64,
+    /// Framebuffer width in pixels.
+    pub fb_width: u32,
+    /// Framebuffer height in pixels.
+    pub fb_height: u32,
+    /// Framebuffer stride in **bytes** per scanline.
+    pub fb_pitch: u32,
+    /// Pixel format tag (see [`FbFormat`]).
+    pub fb_format: u32,
 }
 
 impl CeliumHandoff {

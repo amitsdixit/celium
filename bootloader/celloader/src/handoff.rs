@@ -14,10 +14,23 @@ pub const MAGIC: u64 = u64::from_le_bytes(*b"CELIUM\0\0");
 /// * v1 (W17–W22): magic + version + cpu + acpi + kernel_image.
 /// * v2 (W23-D): adds the optional host-staged boot image triple
 ///   (`boot_image_phys` / `boot_image_len` / `boot_image_crc32c`).
-///   The fields are zero when no image is staged; the kernel then
-///   falls back to its built-in `HELLO_BLOB` so today's bring-up
-///   keeps working unchanged.
-pub const VERSION: u32 = 2;
+/// * v3 (W24-A): adds SMP topology (`cpu_count`, `bsp_apic_id`,
+///   `ap_apic_ids_phys`) and an optional GOP linear framebuffer
+///   block (`fb_phys`, `fb_width`, `fb_height`, `fb_pitch`,
+///   `fb_format`). All new fields default to zero when CelLoader
+///   cannot probe them; the kernel then behaves as a single-CPU
+///   text-only boot, identical to W23 behaviour.
+pub const VERSION: u32 = 3;
+
+/// Framebuffer pixel format tag. Mirrors `celhyper::handoff::FbFormat`.
+#[allow(missing_docs)]
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbFormat {
+    Unknown = 0,
+    Bgra8   = 1,
+    Rgba8   = 2,
+}
 
 /// Information CelLoader hands to CelHyper at the moment of jump.
 #[repr(C)]
@@ -55,6 +68,37 @@ pub struct CeliumHandoff {
     /// Reserved, must be zero. Padding so the struct stays aligned
     /// without forcing every consumer to import `repr(packed)`.
     pub _pad2: u32,
+
+    // ---- v3 (W24-A): SMP topology + framebuffer ----
+
+    /// Total logical CPUs detected via ACPI MADT. `1` means
+    /// "BSP only" (CelLoader could not find a MADT or chose not to
+    /// probe). Bumping above 1 enables [`crate::smp`] on the
+    /// kernel side.
+    pub cpu_count: u32,
+    /// LAPIC id of the bootstrap processor (BSP). `0` is the
+    /// canonical value on every box we've shipped; the field exists
+    /// so CelHyper can sanity-check that it is indeed running on the
+    /// BSP before issuing INIT-SIPI-SIPI to the APs.
+    pub bsp_apic_id: u32,
+    /// Physical address of an array of `u32` APIC ids for the
+    /// application processors (length = `cpu_count - 1`). `0` when
+    /// `cpu_count <= 1`. The array lives in a leaked CelLoader
+    /// allocation; the kernel must treat it as read-only.
+    pub ap_apic_ids_phys: u64,
+
+    /// Physical address of the GOP linear framebuffer base, or `0`
+    /// when CelLoader could not negotiate a graphics console.
+    pub fb_phys: u64,
+    /// Framebuffer horizontal pixel count.
+    pub fb_width: u32,
+    /// Framebuffer vertical pixel count.
+    pub fb_height: u32,
+    /// Framebuffer stride in **bytes** per scanline.
+    pub fb_pitch: u32,
+    /// Pixel format tag (see [`FbFormat`]). Stored as `u32` so the
+    /// FFI ABI is stable across compilers.
+    pub fb_format: u32,
 }
 
 impl CeliumHandoff {
@@ -81,6 +125,51 @@ impl CeliumHandoff {
             boot_image_len: 0,
             boot_image_crc32c: 0,
             _pad2: 0,
+
+            // W24-A: defaults — single CPU, no framebuffer. Stage-0
+            // overlays real values via the builders below once it
+            // has probed the MADT and GOP.
+            cpu_count: 1,
+            bsp_apic_id: 0,
+            ap_apic_ids_phys: 0,
+            fb_phys: 0,
+            fb_width: 0,
+            fb_height: 0,
+            fb_pitch: 0,
+            fb_format: FbFormat::Unknown as u32,
         }
+    }
+
+    /// W24-A: install SMP topology discovered by [`crate::hardware`].
+    ///
+    /// `ap_apic_ids` is a slice of LAPIC ids for every application
+    /// processor (excluding the BSP). The slice must outlive the
+    /// handoff block — in practice CelLoader hands us a `Box::leak`'d
+    /// region and we just store its pointer.
+    #[must_use]
+    pub fn with_smp(mut self, bsp_apic_id: u32, ap_apic_ids_phys: u64, cpu_count: u32) -> Self {
+        self.cpu_count = cpu_count;
+        self.bsp_apic_id = bsp_apic_id;
+        self.ap_apic_ids_phys = ap_apic_ids_phys;
+        self
+    }
+
+    /// W24-A: install the GOP linear framebuffer the kernel can
+    /// optionally draw to during early boot.
+    #[must_use]
+    pub fn with_framebuffer(
+        mut self,
+        fb_phys: u64,
+        fb_width: u32,
+        fb_height: u32,
+        fb_pitch: u32,
+        fb_format: FbFormat,
+    ) -> Self {
+        self.fb_phys = fb_phys;
+        self.fb_width = fb_width;
+        self.fb_height = fb_height;
+        self.fb_pitch = fb_pitch;
+        self.fb_format = fb_format as u32;
+        self
     }
 }

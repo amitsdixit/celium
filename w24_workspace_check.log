@@ -1,0 +1,7 @@
+    Checking celcommon v0.1.0 (C:\Users\amdix\projects\celium\crates\celcommon)
+    Checking celvault v0.1.0 (C:\Users\amdix\projects\celium\crates\celvault)
+    Checking celtest v0.1.0 (C:\Users\amdix\projects\celium\crates\celtest)
+    Checking celimage v0.1.0 (C:\Users\amdix\projects\celium\crates\celimage)
+    Checking celmesh v0.1.0 (C:\Users\amdix\projects\celium\crates\celmesh)
+    Checking celcli v0.1.0 (C:\Users\amdix\projects\celium\crates\celcli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 53.36s

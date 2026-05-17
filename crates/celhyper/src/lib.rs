@@ -56,6 +56,8 @@ pub mod jmp;
 pub mod manager;
 #[cfg(not(test))]
 pub mod serial_io;
+#[cfg(not(test))]
+pub mod smp;
 
 pub use error::{HyperError, HyperResult};
 
