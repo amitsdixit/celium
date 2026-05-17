@@ -192,41 +192,101 @@ pub fn online_count() -> u32 {
     ONLINE.load(Ordering::Acquire)
 }
 
-/// Bring every AP listed in `topology` online by issuing the standard
-/// INIT-SIPI-SIPI sequence. Deferred to W25 — the W24-B kernel does
-/// not yet have a real-mode trampoline page or per-AP boot stack
-/// allocator, so we fail fast with a typed error rather than risk
-/// shipping a partially-armed sequence.
+/// Bring every AP listed in `topology` online.
+///
+/// W25 wires the IPI half of the bring-up: the BSP issues a real
+/// INIT-SIPI-SIPI through [`crate::lapic::Lapic::init_sipi_sipi`] to
+/// every AP id, BUT the kernel still does not allocate a real-mode
+/// trampoline page or a per-AP boot stack. We refuse to dispatch the
+/// SIPI without that prerequisite — landing a SIPI with no
+/// trampoline page mapped would put the AP into an undefined state.
+///
+/// The W25 contract therefore is:
+///
+/// * `cpu_count <= 1`            → `Ok(())` (no-op, happy path).
+/// * `cpu_count > 1`             → [`HyperError::Unimplemented`] with
+///   the explicit `trampoline pending (W26)` tag, after logging that
+///   we *would* IPI every AP id. This means a multi-CPU box keeps
+///   booting single-CPU instead of half-booting an AP.
+///
+/// The actual IPI helper [`send_ipi`] *is* live this week and is
+/// used by the scheduler for cross-pCPU wake-ups once W26 lands the
+/// AP trampoline.
 pub fn bring_up_aps(topology: &Topology) -> HyperResult<()> {
     if topology.cpu_count <= 1 {
-        // Single-CPU systems are the happy-path no-op.
         return Ok(());
     }
+    crate::logger::log_kv("smp_ap_count", u64::from(topology.cpu_count - 1));
     Err(HyperError::Unimplemented(
-        "smp::bring_up_aps: INIT-SIPI sequence pending (W25)",
+        "smp::bring_up_aps: trampoline + AP stacks pending (W26)",
     ))
 }
 
 /// IPI vector tag. The actual byte we write into the ICR low word is
 /// determined per-message-type; see SDM Vol 3 §10.6.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ipi {
-    /// Wake a vCPU pinned to a different pCPU.
+    /// Wake a vCPU pinned to a different pCPU. Vector 0x40.
     Wakeup,
-    /// Request the target pCPU drain its run queue and halt.
+    /// Request the target pCPU drain its run queue and halt. Vector 0x41.
     Drain,
+    /// Hard panic propagation — delivered as NMI so the target halts
+    /// even with interrupts masked.
+    Panic,
 }
 
-/// Send an inter-processor interrupt to `target`. Deferred to W25
-/// — the kernel does not yet program the LAPIC, so any caller would
-/// have to fall through to MMIO writes against an un-initialised
-/// register window. Returning [`HyperError::Unimplemented`] keeps the
-/// trait honest until the LAPIC driver lands.
+impl Ipi {
+    /// Vector byte written into `ICR_LOW[7:0]`.
+    #[must_use]
+    pub fn vector(self) -> u8 {
+        match self {
+            Self::Wakeup => 0x40,
+            Self::Drain => 0x41,
+            Self::Panic => 0,
+        }
+    }
+
+    /// Delivery mode for this IPI kind.
+    #[must_use]
+    pub fn delivery_mode(self) -> crate::lapic::DeliveryMode {
+        match self {
+            Self::Wakeup | Self::Drain => crate::lapic::DeliveryMode::Fixed,
+            Self::Panic => crate::lapic::DeliveryMode::Nmi,
+        }
+    }
+}
+
+/// Send an inter-processor interrupt to `target_pcpu`.
+///
+/// `target_pcpu` indexes into [`PCPUS`]; the LAPIC id is read from
+/// the per-pCPU state populated by [`mark_bsp_online`] (today only
+/// slot 0 is populated, so cross-pCPU IPIs return `Denied` until
+/// W26 brings APs online).
+///
+/// Errors:
+///
+/// * [`HyperError::Invalid`] — `target_pcpu` ≥ [`MAX_PCPUS`].
+/// * [`HyperError::Denied`]  — target pCPU has never registered.
+/// * [`HyperError::Hardware`] — LAPIC reported a delivery-status
+///   hang (1M-iteration timeout).
 pub fn send_ipi(target_pcpu: u32, kind: Ipi) -> HyperResult<()> {
-    let _ = (target_pcpu, kind);
-    Err(HyperError::Unimplemented(
-        "smp::send_ipi: LAPIC driver pending (W25)",
-    ))
+    if (target_pcpu as usize) >= MAX_PCPUS {
+        return Err(HyperError::Invalid("smp: target_pcpu >= MAX_PCPUS"));
+    }
+    let entry = &PCPUS[target_pcpu as usize];
+    let apic_id = entry.apic_id.load(Ordering::Acquire);
+    if entry.vmxon_ready.load(Ordering::Acquire) == 0 {
+        return Err(HyperError::Denied("smp: target pCPU not online"));
+    }
+    let lapic = crate::lapic::Lapic::current()?;
+    lapic.send_ipi(
+        apic_id,
+        kind.vector(),
+        kind.delivery_mode(),
+        crate::lapic::DestShorthand::None,
+    )?;
+    crate::metrics::count_ipi_sent();
+    Ok(())
 }
 
 #[cfg(test)]

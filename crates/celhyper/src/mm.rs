@@ -145,6 +145,8 @@ impl Ept {
             } else {
                 let new_table = p.alloc_zeroed()?;
                 p.write_entry(table, i, new_table.as_u64() | NON_LEAF_RWX);
+                #[cfg(not(test))]
+                crate::metrics::count_ept_table_alloc();
                 new_table
             };
             table = next;
@@ -152,6 +154,8 @@ impl Ept {
         // Leaf at PT (level 0).
         let leaf = (hpa.as_u64() & ADDR_MASK) | flags.bits();
         p.write_entry(table, idx[0], leaf);
+        #[cfg(not(test))]
+        crate::metrics::count_ept_map_4k();
         Ok(())
     }
 

@@ -1,0 +1,420 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running unittests src\main.rs (target\debug\deps\celctl-337fd99a5e6c86eb.exe)
+
+running 39 tests
+test tests::create_label_too_long_is_rejected ... ok
+test tests::create_then_list_then_state ... ok
+test tests::create_with_bad_image_path_fails ... ok
+test boot::tests::missing_image_returns_error ... ok
+test tests::start_via_numeric_target_works ... ok
+test tests::parse_size_to_mib_rejects_non_mib_aligned ... ok
+test tests::start_via_path_target_works ... ok
+test tests::parse_size_to_mib_accepts_common_forms ... ok
+test tests::stop_unallocated_id_errors ... ok
+test tests::create_with_image_validates_and_records ... ok
+test vm::tests::create_lists_and_resolves_path ... ok
+test vm::tests::delete_requires_terminal_state ... ok
+test vm::tests::registry_overflows_cleanly ... ok
+test vm::tests::reset_rejects_non_terminal_vm ... ok
+test vm::tests::resolve_path_rejects_malformed_input ... ok
+test boot::tests::restage_overwrites_previous_blob ... ok
+test vm::tests::resolve_path_denies_unallocated_id ... ok
+test vm::tests::save_is_atomic_and_does_not_leak_tmp_files ... ok
+test boot::tests::stages_full_page_for_4kib_raw_image ... ok
+test boot::tests::clips_request_to_virtual_size_for_tiny_image ... ok
+test boot::tests::stage_leaves_no_tmp_sidecar_on_success ... ok
+test vm::tests::save_then_load_roundtrip ... ok
+test vm::tests::reset_returns_terminal_vm_to_created_and_preserves_digest ... ok
+test vm::tests::start_then_stop_lifecycle ... ok
+test vm::tests::start_vm_skips_sink_when_no_image_path ... ok
+test vm::tests::save_overwrite_replaces_prior_state_atomically ... ok
+test vm::tests::start_with_image_but_no_stage_root_skips_staging ... ok
+test vm::tests::start_with_missing_image_aborts_and_keeps_created_state ... ok
+test vm::tests::start_without_image_path_still_works_with_stage_root ... ok
+test vm::tests::drift_detection_survives_save_then_load_roundtrip ... ok
+test vm::tests::start_after_reset_detects_image_content_drift ... ok
+test vm::tests::stop_before_start_yields_stopped ... ok
+test vm::tests::start_after_reset_with_unchanged_image_succeeds ... ok
+test vm::tests::stats_tracks_slot_occupancy_and_states ... ok
+test vm::tests::start_with_image_stages_boot_blob_and_records_digest ... ok
+test vm::tests::stats_counts_boot_blob_only_for_staged_starts ... ok
+test vm::tests::start_vm_rejects_sink_crc_mismatch ... ok
+test vm::tests::start_vm_ships_staged_blob_to_sink_when_bound ... ok
+test vm::tests::start_vm_propagates_sink_error_and_leaves_state_intact ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests\w18_image_e2e.rs (target\debug\deps\w18_image_e2e-83a2ba9606b6e3d9.exe)
+
+running 2 tests
+test create_with_missing_image_rejected_before_record_written ... ok
+test create_then_start_with_image_stages_boot_blob_and_records_digest ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+     Running unittests src\lib.rs (target\debug\deps\celcommon-6f3fbce6d16a9863.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\celimage-c9405f88e280f43d.exe)
+
+running 31 tests
+test format::tests::detects_vhdx_magic ... ok
+test format::tests::detects_qcow2_magic ... ok
+test format::tests::tags_are_stable ... ok
+test format::tests::defaults_to_raw ... ok
+test format::tests::detects_vmdk_magic ... ok
+test format::tests::rejects_empty ... ok
+test raw::tests::opens_and_reports_size ... ok
+test raw::tests::read_at_clips_at_eof ... ok
+test qcow2::tests::rejects_bad_magic ... ok
+test util::tests::crc32c_known_vectors ... ok
+test util::tests::crc32c_streaming_matches_oneshot ... ok
+test raw::tests::read_at_returns_correct_bytes ... ok
+test raw::tests::read_exact_at_errors_on_short ... ok
+test util::tests::endian_helpers_round_trip ... ok
+test util::tests::endian_helpers_short_read_is_invalid ... ok
+test qcow2::tests::reads_unallocated_cluster_as_zero ... ok
+test qcow2::tests::read_clips_at_virtual_size ... ok
+test qcow2::tests::reads_allocated_cluster ... ok
+test vmdk::tests::opens_synthetic_vmdk_and_reports_info ... ok
+test vmdk::tests::reads_allocated_grain ... ok
+test vhdx::tests::read_clips_at_virtual_size ... ok
+test vhdx::tests::rejects_bad_file_identifier ... ok
+test vmdk::tests::reads_unallocated_grain_as_zero ... ok
+test vmdk::tests::rejects_bad_magic ... ok
+test vhdx::tests::opens_synthetic_vhdx_and_reports_info ... ok
+test qcow2::tests::opens_v3_header_and_reports_info ... ok
+test vmdk::tests::read_clips_at_virtual_size ... ok
+test vmdk::tests::rejects_compressed ... ok
+test vhdx::tests::reads_fully_present_block ... ok
+test vhdx::tests::rejects_corrupt_header_crc ... ok
+test vmdk::tests::rejects_zero_gd_offset ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests\open_dispatch.rs (target\debug\deps\open_dispatch-11f579f3d8daf6b1.exe)
+
+running 5 tests
+test open_raw_via_public_api ... ok
+test inspect_rejects_malformed_vmdk_with_invalid ... ok
+test inspect_rejects_malformed_vhdx_with_invalid ... ok
+test detect_format_recognises_each_magic ... ok
+test full_image_crc32c_matches_oneshot_over_raw ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src\lib.rs (target\debug\deps\celmesh-88a191ad93ad78f5.exe)
+
+running 52 tests
+test capabilities::tests::all_includes_every_named_cap ... ok
+test capabilities::tests::grant_revoke_is_idempotent ... ok
+test capabilities::tests::required_for_each_op ... ok
+test federation::tests::image_metadata_propagates_through_merge ... ok
+test federation::tests::legacy_wire_payload_without_image_fields_still_deserialises ... ok
+test federation::tests::merge_lww_orders_by_epoch_then_hlc ... ok
+test federation::tests::resolve_path_round_trip ... ok
+test federation::tests::local_rows_cannot_be_overwritten_by_peer ... ok
+test federation::tests::local_replace_wipes_prior_local_rows ... ok
+test host::tests::create_attach_detach_volume_round_trip ... ok
+test host::tests::create_then_start_then_stop_cycle ... ok
+test host::tests::registry_full_is_explicit ... ok
+test hyper_host::tests::crc32c_matches_known_vector ... ok
+test admin::tests::readyz_is_503_when_single_node_and_degraded ... ok
+test admin::tests::non_get_method_rejected_without_panic ... ok
+test admin::tests::metrics_endpoint_renders_prometheus_text ... ok
+test admin::tests::healthz_always_returns_200_with_summary ... ok
+test hyper_host::tests::hex_encode_round_trips ... ok
+test admin::tests::unknown_path_returns_404 ... ok
+test hyper_host::tests::loopback_image_load_rejects_length_mismatch ... ok
+test hyper_host::tests::image_load_serde_round_trip ... ok
+test hyper_host::tests::fallback_handles_non_lifecycle_ops ... ok
+test hyper_host::tests::loopback_image_load_rejects_crc_mismatch ... ok
+test hyper_host::tests::loopback_rejects_oversized_label ... ok
+test hyper_host::tests::create_metadata_round_trips_through_snapshot ... ok
+test hyper_host::tests::loopback_round_trips_create_start_stop_delete ... ok
+test hyper_host::tests::loopback_start_on_terminal_is_an_error ... ok
+test hyper_host::tests::stage_image_rejects_empty ... ok
+test hyper_host::tests::strict_mode_rejects_non_lifecycle_ops ... ok
+test hyper_host::tests::stage_image_rejects_oversize ... ok
+test hyper_host::tests::loopback_runs_out_of_slots_after_max_vms ... ok
+test hyper_host::tests::stage_image_round_trips_through_loopback ... ok
+test hyper_host::tests::wire_round_trip_through_serde_is_lossless ... ok
+test hyper_serial::tests::duplex_framing_drives_serve_correctly ... ok
+test membership::tests::mark_left_is_idempotent ... ok
+test membership::tests::merge_inserts_then_supersedes ... ok
+test membership::tests::never_overwrites_self ... ok
+test membership::tests::tick_delta_counts_promotions ... ok
+test membership::tests::tick_promotes_suspect_then_dead ... ok
+test mesh::tests::parse_cluster_path_accepts_well_formed_paths ... ok
+test mesh::tests::parse_cluster_path_rejects_malformed ... ok
+test mesh::tests::pick_one_handles_empty ... ok
+test metrics::tests::counters_only_increase ... ok
+test metrics::tests::prometheus_render_lists_every_metric ... ok
+test metrics::tests::snapshot_is_zero_by_default ... ok
+test transport::tests::mem_transport_round_trip ... ok
+test transport::tests::mem_transport_unknown_peer_errors ... ok
+test hyper_serial::tests::serial_link_round_trip_through_real_tcp ... ok
+test mesh::tests::two_nodes_form_a_cluster ... ok
+test mesh::tests::summary_reports_degraded_for_single_node_and_clears_after_join ... ok
+test mesh::tests::vm_published_on_a_is_visible_on_b ... ok
+test hyper_serial::tests::link_times_out_when_peer_is_silent ... ok
+
+test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+     Running unittests src\lib.rs (target\debug\deps\celtest-ea9eb0b2c3411bed.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\guest_simulation.rs (target\debug\deps\guest_simulation-7fb133f0f67cb4b8.exe)
+
+running 3 tests
+test blob_layout_is_byte_for_byte_what_the_kernel_embeds ... ok
+test blob_runs_through_simulated_ept_and_emits_marker_then_halts ... ok
+test unmapped_gpa_translates_to_none ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\manager_api.rs (target\debug\deps\manager_api-a54e3db74060c2ed.exe)
+
+running 8 tests
+test create_requires_runtime_init ... ok
+test faulted_vm_is_terminal_after_start ... ok
+test full_lifecycle_create_start_halt_stop ... ok
+test ids_are_dense_and_distinct ... ok
+test registry_rejects_overflow ... ok
+test stop_before_start_transitions_to_stopped ... ok
+test unknown_id_is_denied ... ok
+test init_runtime_is_one_shot ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\multi_node.rs (target\debug\deps\multi_node-b626e24efa00161e.exe)
+
+running 3 tests
+test three_nodes_converge_on_membership ... ok
+test vm_on_a_is_visible_on_b_and_c ... ok
+test departed_owner_keeps_last_known_vms_with_owner_alive_false ... FAILED
+
+failures:
+
+---- departed_owner_keeps_last_known_vms_with_owner_alive_false stdout ----
+
+thread 'departed_owner_keeps_last_known_vms_with_owner_alive_false' panicked at crates\celtest\tests\multi_node.rs:144:5:
+failure detector did not flag departed owner
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    departed_owner_keeps_last_known_vms_with_owner_alive_false
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.52s
+
+error: test failed, to rerun pass `-p celtest --test multi_node`
+     Running tests\multi_node_guest.rs (target\debug\deps\multi_node_guest-8de2cd25ae43337e.exe)
+
+running 3 tests
+test invoke_unknown_target_is_clean_error ... ok
+test create_then_start_vm_across_nodes ... ok
+test supervisor_restarts_orphan_vm_with_always_policy ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests\multi_node_udp.rs (target\debug\deps\multi_node_udp-89d449757aaffa5b.exe)
+
+running 3 tests
+test udp_cluster_status_reports_full_topology ... ok
+test udp_three_nodes_guest_lifecycle_via_path ... ok
+test udp_auto_supervisor_restarts_orphan ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests\multi_node_volume.rs (target\debug\deps\multi_node_volume-15fe830801b74dde.exe)
+
+running 3 tests
+test volume_crud_across_nodes ... ok
+test live_guest_with_persistent_volume_survives_owner_failure ... ok
+test supervisor_preserves_volume_attachments_across_restart ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests\multi_vm.rs (target\debug\deps\multi_vm-4245834bc342fd20.exe)
+
+running 8 tests
+test create_requires_invoke_and_write ... ok
+test list_vms_reports_every_allocated_slot ... ok
+test list_vms_records_last_exit_reason ... ok
+test namespace_requires_vm_object_and_invoke ... ok
+test read_only_cap_can_query_but_not_mutate ... ok
+test start_requires_only_invoke ... ok
+test stop_one_vm_does_not_affect_others ... ok
+test two_vms_get_distinct_ids_and_independent_state ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\persistent_volume_e2e.rs (target\debug\deps\persistent_volume_e2e-17bdb78d6c2649a1.exe)
+
+running 2 tests
+test volume_io_chunk_size_is_capped ... ok
+test persistent_volume_survives_restart_and_snapshot_round_trip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests\smoke.rs (target\debug\deps\smoke-66a5463148a3a5a6.exe)
+
+running 1 test
+test celcommon_is_usable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\vm_lifecycle.rs (target\debug\deps\vm_lifecycle-b8e69bdd3026515f.exe)
+
+running 6 tests
+test dispatcher_records_then_halts ... ok
+test cannot_start_twice ... ok
+test stop_after_halt_is_denied ... ok
+test happy_path_created_running_halted ... ok
+test stop_works_pre_and_post_launch ... ok
+test unknown_exit_transitions_to_faulted ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\w14_e2e.rs (target\debug\deps\w14_e2e-95f60265bddede86.exe)
+
+running 2 tests
+test capability_denied_blocks_unauthorised_ops ... ok
+test vm_lifecycle_with_persistent_volume_survives_restart ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests\w15.rs (target\debug\deps\w15-74b41dd8a168e014.exe)
+
+running 3 tests
+test networking_capability_denial ... ok
+test networking_round_trip ... ok
+test k8s_personality_provisions_cluster ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests\w17_core.rs (target\debug\deps\w17_core-b9c89cfbe71a1ddc.exe)
+
+running 5 tests
+test mesh_join_heals_isolated_node ... ignored
+test mesh_metrics_increment_under_real_traffic ... ignored
+test rpc_timeout_returns_celerror_timeout ... ignored
+test mem_volume_store_w17_surface ... ok
+test file_volume_store_w17_surface ... ok
+
+test result: ok. 2 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests\w20_e2e.rs (target\debug\deps\w20_e2e-8197b86af716fa0b.exe)
+
+running 3 tests
+test image_metadata_propagates_to_every_peer ... ok
+test boot_blob_digest_update_overtakes_previous_value ... ok
+test owner_departure_preserves_image_fields_for_diagnosis ... FAILED
+
+failures:
+
+---- owner_departure_preserves_image_fields_for_diagnosis stdout ----
+
+thread 'owner_departure_preserves_image_fields_for_diagnosis' panicked at crates\celtest\tests\w20_e2e.rs:230:5:
+b did not notice a's departure
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    owner_departure_preserves_image_fields_for_diagnosis
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.75s
+
+error: test failed, to rerun pass `-p celtest --test w20_e2e`
+     Running tests\w22_bridge_e2e.rs (target\debug\deps\w22_bridge_e2e-f8004224c5fbe275.exe)
+
+running 2 tests
+test stop_then_delete_round_trips_through_bridge ... ok
+test end_to_end_bridge_drives_lifecycle_through_real_tcp ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\w23_e2_stage_image.rs (target\debug\deps\w23_e2_stage_image-1fb6bbeff3634003.exe)
+
+running 2 tests
+test stage_image_propagates_kernel_rejection_over_tcp ... ok
+test stage_image_round_trips_over_real_tcp_bridge ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\w23_qemu_bridge.rs (target\debug\deps\w23_qemu_bridge-3814b19a82b0c17e.exe)
+
+running 3 tests
+test live_qemu_bridge_lists_bringup_vms ... ignored, requires a running QEMU+CelHyper with COM2 -> TCP (see file header)
+test live_qemu_bridge_round_trips_w23b_metadata ... ignored, requires a running QEMU+CelHyper with COM2 -> TCP (see file header)
+test live_qemu_bridge_stage_image_create_start ... ignored, requires a running QEMU+CelHyper with COM2 -> TCP (see file header)
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\celvault-303dac32e1b5a4b6.exe)
+
+running 20 tests
+test network::tests::cidr_exhaustion_is_explicit ... ok
+test network::tests::cidr_parse_and_alloc ... ok
+test network::tests::cidr_parse_rejects_bad_input ... ok
+test network::tests::explicit_ip_request_honoured_then_rejected ... ok
+test network::tests::load_balancer_least_conn_pick ... ok
+test network::tests::load_balancer_round_robin_pick ... ok
+test tests::create_then_read_write_round_trip ... ok
+test network::tests::security_groups_validate_rules ... ok
+test network::tests::networks_nics_round_trip ... ok
+test tests::deleting_volume_drops_snapshots ... ok
+test tests::ids_are_node_scoped_and_monotonic ... ok
+test tests::out_of_range_io_is_explicit ... ok
+test tests::reject_invalid_volumes ... ok
+test tests::restore_unknown_or_orphaned_is_invalid ... ok
+test tests::snapshot_create_list_restore_delete ... ok
+test file_store::tests::integrity_check_detects_missing_volume_body ... ok
+test file_store::tests::round_trip_through_disk ... ok
+test file_store::tests::integrity_check_detects_torn_volume_body ... ok
+test file_store::tests::snapshot_persists_across_reopen ... ok
+test file_store::tests::integrity_check_is_clean_for_well_formed_store ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+   Doc-tests celcommon
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests celimage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests celmesh
+
+running 1 test
+test crates\celmesh\src\capabilities.rs - capabilities (line 13) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests celtest
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests celvault
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 2 targets failed:
+    `-p celtest --test multi_node`
+    `-p celtest --test w20_e2e`

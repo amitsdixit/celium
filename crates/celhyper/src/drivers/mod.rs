@@ -33,7 +33,9 @@
 #![cfg(not(test))]
 
 pub mod virtio_blk;
+pub mod virtio_console;
 pub mod virtio_net;
+pub mod nvme;
 
 use crate::error::HyperResult;
 

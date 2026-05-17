@@ -289,6 +289,7 @@ pub extern "C" fn vm_exit_dispatch() -> ! {
     logger::log_kv("guest_rflags",       regs.rflags);
 
     let basic = (raw_reason & 0xFFFF) as u32;
+    crate::metrics::count_vm_exit(basic);
     match read_exit() {
         Ok(ExitKind::Hlt) => {
             logger::log("celhyper: vm-exit HLT — guest halted normally");

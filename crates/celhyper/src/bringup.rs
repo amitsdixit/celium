@@ -64,11 +64,23 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
     unsafe { crate::host_gdt::install(); }
     logger::log("celhyper: host gdt+tss installed");
 
-    // 2b. W24-B: read the SMP topology from the handoff and register
-    //     the BSP. AP bring-up is gated behind `smp::bring_up_aps`
-    //     which currently returns `Unimplemented(W25)` — we surface
-    //     that as a log line rather than failing the whole boot so a
-    //     multi-CPU box still runs single-CPU until W25.
+    // 2b. W24-B / W25-A: read the SMP topology from the handoff,
+    //     initialise the LAPIC driver, and register the BSP. AP
+    //     bring-up is gated behind `smp::bring_up_aps` which still
+    //     returns `Unimplemented(W26)` (trampoline + AP stacks
+    //     pending). LAPIC init is best-effort — a platform without
+    //     the standard MMIO window keeps booting single-CPU.
+    match crate::lapic::Lapic::init() {
+        Ok(l) => {
+            logger::log_kv("lapic_base", l.base());
+            logger::log_kv("lapic_id", u64::from(l.id()));
+            logger::log_kv("lapic_version", u64::from(l.version()));
+        }
+        Err(e) => {
+            logger::log("celhyper: lapic init failed; IPIs will fail closed");
+            let _ = e;
+        }
+    }
     match crate::smp::Topology::from_handoff(handoff) {
         Ok(topology) => {
             logger::log_kv("smp_cpu_count", u64::from(topology.cpu_count));
@@ -79,7 +91,7 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
             }
             if topology.cpu_count > 1 {
                 if let Err(e) = crate::smp::bring_up_aps(&topology) {
-                    logger::log("celhyper: smp: AP bring-up deferred (W25)");
+                    logger::log("celhyper: smp: AP bring-up deferred (W26)");
                     let _ = e;
                 }
             }
@@ -154,6 +166,9 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
     if faulted_any {
         Err(HyperError::Hardware("one or more guest VMs faulted"))
     } else {
+        // W25-F: dump the kernel hot-path counters before we return.
+        // Captured by `scripts/run-qemu.sh` log parsing.
+        crate::metrics::log_snapshot();
         logger::log("celhyper: bring_up complete");
         Ok(())
     }

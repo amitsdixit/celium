@@ -53,7 +53,13 @@ pub mod drivers;
 #[cfg(not(test))]
 pub mod jmp;
 #[cfg(not(test))]
+pub mod lapic;
+#[cfg(not(test))]
 pub mod manager;
+#[cfg(not(test))]
+pub mod metrics;
+#[cfg(not(test))]
+pub mod pci;
 #[cfg(not(test))]
 pub mod serial_io;
 #[cfg(not(test))]
