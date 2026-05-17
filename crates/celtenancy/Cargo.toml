@@ -1,0 +1,27 @@
+[package]
+name         = "celtenancy"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+description  = "Celium Tenancy Layer \u2014 tenants, users, capabilities, quotas."
+
+[lib]
+name = "celtenancy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "celtenancy"
+path = "src/main.rs"
+
+[dependencies]
+celcommon   = { workspace = true }
+celmesh     = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }
+clap        = { workspace = true }
+tracing-subscriber = { workspace = true }

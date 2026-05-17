@@ -20,6 +20,7 @@
 
 pub mod boot;
 pub mod bridge;
+pub mod tenant_cli;
 pub mod vm;
 
 use std::path::PathBuf;
@@ -69,6 +70,13 @@ enum Cmd {
     Cluster {
         #[command(subcommand)]
         op: ClusterCmd,
+    },
+    /// W27: Tenancy-Layer operator surface (create tenants, manage
+    /// users, inspect quotas). Backed by a JSON `--tenant-store`
+    /// file (default `./build/celctl-tenants.json`).
+    Tenant {
+        #[command(subcommand)]
+        op: tenant_cli::TenantCmd,
     },
 }
 
@@ -542,6 +550,9 @@ fn main() -> CelResult<()> {
                 .build()
                 .map_err(|e| CelError::Io(format!("tokio runtime: {e}")))?;
             rt.block_on(run_cluster_cmd(&state_path, op))?;
+        }
+        Cmd::Tenant { op } => {
+            tenant_cli::run(op)?;
         }
     }
     Ok(())

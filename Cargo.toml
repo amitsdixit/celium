@@ -6,6 +6,7 @@ members = [
     "crates/celvault",
     "crates/celimage",
     "crates/celcli",
+    "crates/celtenancy",
     "crates/celtest",
 ]
 # Bare-metal crates are stand-alone packages built against custom targets.
@@ -44,6 +45,7 @@ celcommon   = { path = "crates/celcommon" }
 celmesh     = { path = "crates/celmesh" }
 celvault    = { path = "crates/celvault" }
 celimage    = { path = "crates/celimage" }
+celtenancy  = { path = "crates/celtenancy" }
 
 [profile.release]
 opt-level     = 3

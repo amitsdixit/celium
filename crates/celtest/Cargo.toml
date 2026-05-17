@@ -13,5 +13,6 @@ celcommon = { workspace = true }
 tracing   = { workspace = true }
 
 [dev-dependencies]
-celmesh   = { workspace = true }
-tokio     = { workspace = true }
+celmesh    = { workspace = true }
+celtenancy = { workspace = true }
+tokio      = { workspace = true }

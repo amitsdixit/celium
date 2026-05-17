@@ -16,6 +16,7 @@ path = "src/main.rs"
 celcommon          = { workspace = true }
 celmesh            = { workspace = true }
 celimage           = { workspace = true }
+celtenancy         = { workspace = true }
 clap               = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
