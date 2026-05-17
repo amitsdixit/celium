@@ -1,9 +1,13 @@
 # Celium — Installation Guide
 
-This guide covers the development environment for the std workspace
-(`celcommon`, `celmesh`, `celvault`, `celcli`, `celtest`). Bare-metal
-crates (`celloader`, `celhyper`) require additional custom-target
-toolchains and are covered at the end.
+This guide covers the **developer build environment** for the std
+workspace (`celcommon`, `celmesh`, `celvault`, `celcli`, `celtest`).
+Bare-metal crates (`celloader`, `celhyper`) require additional
+custom-target toolchains and are covered at the end.
+
+> **Looking to install Celium on a host (ISO / USB / PXE)?**
+> See [`INSTALLER.md`](INSTALLER.md) and the operator runbooks under
+> [`runbooks/`](runbooks/) instead.
 
 ## 1. Prerequisites
 

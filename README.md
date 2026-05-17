@@ -4,8 +4,8 @@
 > No Linux host, no KVM, no inherited hypervisor — Celium owns the silicon
 > from UEFI boot all the way up to a Kubernetes-shaped operator surface.
 
-[![Status](https://img.shields.io/badge/status-W22%20complete-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-189%20pass%20%2F%200%20fail-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-W26%20Core%20Layer%20signed--off-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-197%20pass%20%2F%202%20flake%20%2F%207%20ignored-brightgreen)]()
 [![Rust](https://img.shields.io/badge/rust-stable%201.88-orange)]()
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)]()
 
@@ -134,10 +134,19 @@ variants cover every operator action in the system today.
 
 ## What's implemented today
 
-**Status:** Week 22 (CelHyper bridge) complete. 189 tests pass / 0
-fail / 4 ignored across 28 test suites. Validated on Windows + Ubuntu
-24.04. Ignored tests are the W17 UDP soak set and one optional
-slow case; run them with `--include-ignored`.
+**Status:** Week 26 — **Core Layer signed off**. CelHyper, CelMesh,
+CelVault, CelCli are feature-complete for the bare-metal Type-1
+hypervisor + clustered control plane. 197 tests pass / 2 known
+Windows gossip-timing flakes / 7 ignored across 24 suites. The two
+flakes pass in isolation on every platform; they are documented in
+[docs/05_W26_SIGNOFF.md](docs/05_W26_SIGNOFF.md) and tracked for
+elimination in the Tenancy Layer.
+
+See:
+* [docs/05_W26_SIGNOFF.md](docs/05_W26_SIGNOFF.md) — sign-off doc.
+* [docs/INSTALLER.md](docs/INSTALLER.md) — installer guide.
+* [docs/runbooks/](docs/runbooks/) — first-boot / cluster-join / VM-create runbooks.
+* [docs/adr/0004-core-layer-signoff.md](docs/adr/0004-core-layer-signoff.md) — sign-off ADR.
 
 ### W17 — Core Layer hardening (NEW)
 
