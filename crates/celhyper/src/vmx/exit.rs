@@ -252,9 +252,11 @@ pub fn read_exit() -> HyperResult<ExitKind> {
 
 /// Rust dispatcher invoked from the asm trampoline.
 ///
-/// `extern "C"` for a stable ABI from asm; `-> !` because Week-4 has no
-/// resume story yet — `vmresume` is wired in Week-5 once we have
-/// per-vCPU state and an interrupt controller.
+/// `extern "C"` for a stable ABI from asm; `-> !` because the function
+/// never returns through its own epilogue — it either `longjmp`s back
+/// to the caller of [`crate::manager::start_vm`] (success path) or, in
+/// rare boot situations where no `setjmp` is yet in scope, halts the
+/// host (defensive fallback).
 ///
 /// On a recognised exit reason we log a structured record:
 ///   * basic reason
@@ -264,6 +266,11 @@ pub fn read_exit() -> HyperResult<ExitKind> {
 ///
 /// On `Hlt` (the success path) we also emit the marker the integration
 /// harness greps for: `"GUEST OK — Celium Guest Alive!"`.
+///
+/// Outcome encoding passed to [`crate::jmp::longjmp`]: a non-zero tag
+/// that callers may interpret in future patches. Today the tag is the
+/// basic exit reason ORed with `0x1_0000_0000` so it can never collide
+/// with the `0` reserved for "first-call `setjmp` save".
 #[no_mangle]
 pub extern "C" fn vm_exit_dispatch() -> ! {
     let regs = guest_regs();
@@ -281,6 +288,7 @@ pub extern "C" fn vm_exit_dispatch() -> ! {
     logger::log_kv("guest_rax",          regs.rax);
     logger::log_kv("guest_rflags",       regs.rflags);
 
+    let basic = (raw_reason & 0xFFFF) as u32;
     match read_exit() {
         Ok(ExitKind::Hlt) => {
             logger::log("celhyper: vm-exit HLT — guest halted normally");
@@ -316,7 +324,17 @@ pub extern "C" fn vm_exit_dispatch() -> ! {
         }
     }
 
-    // Stable termination marker for log-greppers.
+    // Stable termination marker for log-greppers — emitted before the
+    // longjmp so the line lands on COM1 even if the resume path is
+    // somehow disturbed.
     logger::log("celhyper: vm halted");
-    crate::halt()
+
+    // Return to the caller of `manager::start_vm` via the resume
+    // window stamped by `jmp::setjmp`. The tag is the basic reason
+    // OR'd with bit 32 to keep it strictly non-zero.
+    let tag: u64 = (1u64 << 32) | u64::from(basic);
+    // SAFETY: `start_vm` calls `setjmp` immediately before `vmlaunch`
+    // and remains on that frame until the dispatcher runs; the saved
+    // window is live for the lifetime of this call.
+    unsafe { crate::jmp::longjmp(tag) }
 }

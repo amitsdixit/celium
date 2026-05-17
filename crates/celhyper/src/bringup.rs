@@ -52,6 +52,10 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
     manager::init_runtime()?;
     logger::log("celhyper: vmx runtime initialised");
 
+    // 2a. Stamp the resume buffer pointer used by the VMX exit
+    //     dispatcher's longjmp tail. Must precede any `start_vm`.
+    crate::jmp::init();
+
     // 2a. Replace the UEFI GDT with our own (which carries a TSS).
     //     SDM §26.2.3 forbids HOST_TR=0 at VM entry; UEFI's GDT has no
     //     TSS slot and `str` returns the null selector without this.

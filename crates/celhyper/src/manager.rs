@@ -173,6 +173,24 @@ pub fn start_vm(id: VmId) -> HyperResult<()> {
     sched::set_active(vm)?;
 
     vm.mark_running()?;
+
+    // The dispatcher returns here via `crate::jmp::longjmp` after the
+    // guest VM-exits and the per-exit work in `vm_exit_dispatch`
+    // completes. The saved frame is this very call to `start_vm`.
+    //
+    // SAFETY: `setjmp` is invoked exactly once per `start_vm` call,
+    // immediately before `vmlaunch`. The frame stays live across the
+    // launch because `vmlaunch` does not return on entry success.
+    let resumed = unsafe { crate::jmp::setjmp() };
+    if resumed != 0 {
+        // Dispatcher longjmp'd back; the active VM has already had
+        // its terminal transition recorded by `sched::dispatch_exit`.
+        // `resumed` carries an exit-classification tag, retained for
+        // future use; we don't surface it to callers today.
+        let _ = resumed;
+        return Ok(());
+    }
+
     match launch::vmlaunch() {
         Ok(()) => Ok(()),
         Err(HyperError::Internal(_) | HyperError::Hardware(_)) => {

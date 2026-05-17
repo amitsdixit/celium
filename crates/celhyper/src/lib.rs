@@ -46,6 +46,8 @@ pub mod bringup;
 #[cfg(not(test))]
 pub mod host_gdt;
 #[cfg(not(test))]
+pub mod jmp;
+#[cfg(not(test))]
 pub mod manager;
 #[cfg(not(test))]
 pub mod serial_io;

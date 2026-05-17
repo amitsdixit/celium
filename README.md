@@ -215,16 +215,21 @@ slow case; run them with `--include-ignored`.
 
 ### Data plane
 
-- 🟡 **CelHyper kernel** (W7–W12 + W22-B-2): VMX setup, EPT
-  programming, full guest-state programming for real-mode
-  unrestricted-guest, `vmlaunch` path, register save/restore, plus a
-  kernel-side IPC bridge — hand-rolled `no_std` JSON wire codec,
-  COM1 UART driver behind a `spin::Mutex`, and a `bridge::run()`
-  IPC loop that drives `manager::{create,start,stop,delete,list}_vm`.
-  Builds clean for `x86_64-unknown-none`. **Not yet booted on QEMU
-  or bare metal.**
-- 🟡 **CelLoader code is written**: UEFI stage-0 boot path. Not yet
-  booted in OVMF.
+- ✅ **CelHyper kernel boots on QEMU + OVMF (KVM, nested VMX).** VMX
+  setup, EPT programming, full guest-state programming for real-mode
+  unrestricted-guest, `vmlaunch`, an asm trampoline + Rust dispatcher
+  for VM-exits, and a `setjmp`/`longjmp` return path
+  ([`crates/celhyper/src/jmp.rs`](crates/celhyper/src/jmp.rs)) so the
+  dispatcher hands control back to `manager::start_vm` after every
+  guest exit instead of halting. Bring-up launches two hello-VMs
+  back-to-back, both hit `HLT`, both reach `Halted`, and the kernel
+  then enters `bridge::run()` listening for NDJSON on COM1. Reproduce
+  with `scripts/run-qemu.sh` on a KVM host with nested VMX
+  (`/usr/share/OVMF/OVMF_CODE_4M.fd` split firmware auto-discovered).
+- ✅ **CelLoader stage-0** ([`bootloader/celloader`](bootloader/celloader)):
+  UEFI stage-0 — CPU vendor + VMX probe, ACPI RSDP capture, image
+  load + relocate, handoff page, `ExitBootServices`. Boots in OVMF
+  end-to-end through the script above.
 - ✅ **Control-plane bridge to celhyper (W22-A/B/C).** `CelhyperVmHost`
   in [`crates/celmesh/src/hyper_host.rs`](crates/celmesh/src/hyper_host.rs)
   translates `VmOp::{Create,Start,Stop,Delete,List}` into wire-stable
@@ -239,7 +244,9 @@ slow case; run them with `--include-ignored`.
   drive the full host↔kernel loop through real TCP against a
   `LoopbackHyperLink` standing in for the on-metal serial endpoint.
 
-QEMU/bare-metal validation of the kernel half lands in a later milestone.
+The kernel half of the bridge is built; closing the loop against a
+host `SerialHyperLink` over QEMU's `-serial tcp:` redirect is the next
+milestone.
 
 ### Quick command reference
 
