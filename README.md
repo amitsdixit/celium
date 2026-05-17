@@ -223,7 +223,7 @@ slow case; run them with `--include-ignored`.
   dispatcher hands control back to `manager::start_vm` after every
   guest exit instead of halting. Bring-up launches two hello-VMs
   back-to-back, both hit `HLT`, both reach `Halted`, and the kernel
-  then enters `bridge::run()` listening for NDJSON on COM1. Reproduce
+  then enters `bridge::run()` listening for NDJSON on COM2. Reproduce
   with `scripts/run-qemu.sh` on a KVM host with nested VMX
   (`/usr/share/OVMF/OVMF_CODE_4M.fd` split firmware auto-discovered).
 - ✅ **CelLoader stage-0** ([`bootloader/celloader`](bootloader/celloader)):
@@ -243,10 +243,17 @@ slow case; run them with `--include-ignored`.
   [`crates/celtest/tests/w22_bridge_e2e.rs`](crates/celtest/tests/w22_bridge_e2e.rs)
   drive the full host↔kernel loop through real TCP against a
   `LoopbackHyperLink` standing in for the on-metal serial endpoint.
-
-The kernel half of the bridge is built; closing the loop against a
-host `SerialHyperLink` over QEMU's `-serial tcp:` redirect is the next
-milestone.
+- ✅ **Host ↔ live-kernel loop closed (W23-A).** The bridge UART is
+  COM2 (0x2F8), demuxed off the logger noise that lives on COM1.
+  `scripts/run-qemu.sh` exposes COM2 via `BRIDGE_TCP=host:port` →
+  `-serial tcp:`. A host-side `SerialHyperLink` connects to that
+  TCP listener and drives the kernel's `bridge::run()` directly:
+  `snapshot()` lists the two bring-up VMs as `Halted`/`last_exit=12`,
+  then `Create` → `Start` → `Delete` round-trip a third VM end-to-end
+  through real VMX launch + HLT inside QEMU. Reproduce with
+  [`scripts/run-qemu-bridge-smoke.sh`](scripts/run-qemu-bridge-smoke.sh)
+  driving [`crates/celtest/tests/w23_qemu_bridge.rs`](crates/celtest/tests/w23_qemu_bridge.rs)
+  (gated `#[ignore]` — needs QEMU + KVM + nested VMX).
 
 ### Quick command reference
 

@@ -125,6 +125,19 @@ else
     echo "$QEMU -accel $ACCEL -cpu $cpu_model -bios $OVMF"
 fi
 
+# Optional bridge UART (COM2) → TCP, for host-side SerialHyperLink
+# end-to-end tests. Enabled when BRIDGE_TCP is set to host:port. When
+# unset, COM2 is wired to a null device so the kernel can still
+# initialise it.
+BRIDGE_TCP="${BRIDGE_TCP:-}"
+bridge_serial=(-serial null)
+if [[ -n "$BRIDGE_TCP" ]]; then
+    # `server,nowait` makes QEMU listen on the address; the host-side
+    # SerialHyperLink connects whenever it is ready.
+    bridge_serial=(-serial "tcp:${BRIDGE_TCP},server=on,wait=off")
+    echo "bridge UART (COM2) listening on tcp:$BRIDGE_TCP"
+fi
+
 timeout "${TIMEOUT}s" "$QEMU" \
     -machine q35 \
     -accel  "$ACCEL" \
@@ -134,6 +147,7 @@ timeout "${TIMEOUT}s" "$QEMU" \
     -drive  "format=raw,file=fat:rw:$esp" \
     -debugcon "file:$debugcon_log" \
     -serial   "file:$com1_log" \
+    "${bridge_serial[@]}" \
     -no-reboot \
     -display none \
     > build/qemu.stdout.log 2> build/qemu.stderr.log || true

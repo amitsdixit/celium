@@ -65,7 +65,12 @@ static mut TX_BUF: [u8; TX_CAP] = [0; TX_CAP];
 /// a class of error the bridge cannot translate into a wire reply;
 /// today every manager error is converted to a "session teardown".
 pub fn run() -> ! {
-    crate::logger::log("celhyper: bridge ready on COM1 (NDJSON, celhyper-ipc/1)");
+    // Initialise the dedicated bridge UART (COM2, 0x2F8). The kernel
+    // logger lives on COM1; the bridge gets its own port so a host
+    // SerialHyperLink can connect over QEMU's `-serial tcp:` without
+    // having to demux log noise off the wire.
+    serial_io::init();
+    crate::logger::log("celhyper: bridge ready on COM2 (NDJSON, celhyper-ipc/1)");
     loop {
         // SAFETY: this function is the unique caller and runs on a
         // single thread (the BSP). The static buffers are not
