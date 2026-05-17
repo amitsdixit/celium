@@ -64,10 +64,17 @@ pub fn bring_up(handoff: &CeliumHandoff) -> HyperResult<()> {
     unsafe { crate::host_gdt::install(); }
     logger::log("celhyper: host gdt+tss installed");
 
-    // 3. Create two VMs.
-    let id_a = ns.create_vm(&CreateVmRequest::hello())?;
+    // 3. Create two VMs from the W23-D boot-image source. The image
+    //    source is "handoff-staged if CelLoader supplied one, else
+    //    the built-in HELLO_BLOB". Bringup never branches on the
+    //    answer — `from_handoff_or_embedded` is the single source of
+    //    truth, so adding new image sources (W23-E bridge-streamed,
+    //    W23-F virtio-blk-attached) won't touch this code.
+    let image = crate::image_loader::BootImage::from_handoff_or_embedded(handoff);
+    let create_req = CreateVmRequest::from_boot_image(&image);
+    let id_a = ns.create_vm(&create_req)?;
     logger::log_kv("vm_a_id", u64::from(id_a.0));
-    let id_b = ns.create_vm(&CreateVmRequest::hello())?;
+    let id_b = ns.create_vm(&create_req)?;
     logger::log_kv("vm_b_id", u64::from(id_b.0));
     logger::log_kv("vm_count", ns.vm_count()? as u64);
 

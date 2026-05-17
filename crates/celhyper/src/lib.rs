@@ -46,6 +46,10 @@ pub mod bringup;
 #[cfg(not(test))]
 pub mod host_gdt;
 #[cfg(not(test))]
+pub mod image_loader;
+#[cfg(not(test))]
+pub mod drivers;
+#[cfg(not(test))]
 pub mod jmp;
 #[cfg(not(test))]
 pub mod manager;

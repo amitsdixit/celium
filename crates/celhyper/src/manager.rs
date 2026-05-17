@@ -73,6 +73,19 @@ impl<'a> CreateVmRequest<'a> {
             guest_rsp: 0x0000,
         }
     }
+
+    /// W23-D: build a request from a validated
+    /// [`crate::image_loader::BootImage`]. This is the path bring-up
+    /// and the bridge will migrate to as the canned blob path is
+    /// retired across W23-E/F.
+    #[must_use]
+    pub fn from_boot_image(image: &crate::image_loader::BootImage<'a>) -> Self {
+        Self {
+            blob:      image.blob,
+            guest_rip: image.entry_rip,
+            guest_rsp: image.entry_rsp,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,12 @@ use crate::error::{HyperError, HyperResult};
 pub const MAGIC: u64 = u64::from_le_bytes(*b"CELIUM\0\0");
 
 /// Layout version. Mismatch with the loader is fatal.
-pub const VERSION: u32 = 1;
+///
+/// * v1 (W17–W22).
+/// * v2 (W23-D): adds `boot_image_phys` / `boot_image_len` /
+///   `boot_image_crc32c`. Zero in all three means "no image staged";
+///   the kernel then loads its built-in `HELLO_BLOB`.
+pub const VERSION: u32 = 2;
 
 /// Subset of CPUID facts collected by stage-0. Layout matches
 /// `celloader::hardware::CpuFacts` byte-for-byte.
@@ -48,6 +53,20 @@ pub struct CeliumHandoff {
     pub kernel_image_phys: u64,
     /// Length of the image in bytes.
     pub kernel_image_len: u64,
+
+    /// W23-D: physical address of a host-staged guest boot image,
+    /// or `0` if no image is staged. CelLoader passes `0` today
+    /// (image staging is W23-E); the kernel then falls back to its
+    /// built-in `HELLO_BLOB` so existing bring-up regression tests
+    /// pass unchanged.
+    pub boot_image_phys: u64,
+    /// Length of `boot_image_phys` in bytes. Must be `0` iff
+    /// `boot_image_phys == 0`.
+    pub boot_image_len: u64,
+    /// CRC32C (Castagnoli) of the staged boot image, or `0` if none.
+    pub boot_image_crc32c: u32,
+    /// Reserved, must be zero.
+    pub _pad2: u32,
 }
 
 impl CeliumHandoff {

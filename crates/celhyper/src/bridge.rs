@@ -146,11 +146,14 @@ fn dispatch(req: Request<'_>) -> HyperResult<Reply> {
             // indexed by slot id so List replies can echo them back.
             // The kernel `manager` itself never sees these fields —
             // keeping its struct surface minimal is a deliberate W22
-            // goal. The image is *not* loaded into the guest today;
-            // the kernel still runs the canned HELLO bring-up
-            // template. The metadata path closes the host→kernel
-            // drift-detection loop ahead of the loader landing.
-            let req = manager::CreateVmRequest::hello();
+            // goal. The image bytes themselves are not yet shipped
+            // over the bridge (that's W23-E); for now every Create
+            // installs the same boot image — handoff-staged if
+            // CelLoader provided one, else the embedded HELLO_BLOB
+            // — so the host's `image_path` / `boot_blob_crc32c` are
+            // recorded but not enforced.
+            let image = crate::image_loader::BootImage::embedded();
+            let req = manager::CreateVmRequest::from_boot_image(&image);
             let id = manager::create_vm(&req)?;
             remember_label(id, label)?;
             remember_extras(id, image_path, cpu_count, memory_mib, boot_blob_crc32c)?;
