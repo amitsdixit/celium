@@ -4,8 +4,8 @@
 > No Linux host, no KVM, no inherited hypervisor — Celium owns the silicon
 > from UEFI boot all the way up to a Kubernetes-shaped operator surface.
 
-[![Status](https://img.shields.io/badge/status-W17%20complete-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-100%20pass%20%2F%200%20fail-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-W22%20complete-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-189%20pass%20%2F%200%20fail-brightgreen)]()
 [![Rust](https://img.shields.io/badge/rust-stable%201.88-orange)]()
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)]()
 
@@ -134,12 +134,10 @@ variants cover every operator action in the system today.
 
 ## What's implemented today
 
-**Status:** Week 17 (Core Layer hardening) complete. 100 tests pass / 0
-fail / 3 ignored across 22 test suites. Validated on Windows + Ubuntu
-24.04. The 3 ignored tests are W17 UDP soak tests (`w17_core` —
-`mesh_metrics_increment_under_real_traffic`, `mesh_join_heals_isolated_node`,
-`rpc_timeout_returns_celerror_timeout`); run them with
-`cargo test -p celtest --test w17_core -- --include-ignored`.
+**Status:** Week 22 (CelHyper bridge) complete. 189 tests pass / 0
+fail / 4 ignored across 28 test suites. Validated on Windows + Ubuntu
+24.04. Ignored tests are the W17 UDP soak set and one optional
+slow case; run them with `--include-ignored`.
 
 ### W17 — Core Layer hardening (NEW)
 
@@ -217,17 +215,31 @@ fail / 3 ignored across 22 test suites. Validated on Windows + Ubuntu
 
 ### Data plane
 
-- 🟡 **CelHyper code is written** (W7–W12): VMX setup, EPT
+- 🟡 **CelHyper kernel** (W7–W12 + W22-B-2): VMX setup, EPT
   programming, full guest-state programming for real-mode
-  unrestricted-guest, vmlaunch path, register save/restore. **Not
-  yet booted on QEMU or bare metal.**
+  unrestricted-guest, `vmlaunch` path, register save/restore, plus a
+  kernel-side IPC bridge — hand-rolled `no_std` JSON wire codec,
+  COM1 UART driver behind a `spin::Mutex`, and a `bridge::run()`
+  IPC loop that drives `manager::{create,start,stop,delete,list}_vm`.
+  Builds clean for `x86_64-unknown-none`. **Not yet booted on QEMU
+  or bare metal.**
 - 🟡 **CelLoader code is written**: UEFI stage-0 boot path. Not yet
   booted in OVMF.
+- ✅ **Control-plane bridge to celhyper (W22-A/B/C).** `CelhyperVmHost`
+  in [`crates/celmesh/src/hyper_host.rs`](crates/celmesh/src/hyper_host.rs)
+  translates `VmOp::{Create,Start,Stop,Delete,List}` into wire-stable
+  `HyperRequest`/`HyperReply` frames over the `HyperLink` trait;
+  volumes/networks/snapshots delegate to an embedded `MemVmHost`.
+  `SerialHyperLink` in
+  [`crates/celmesh/src/hyper_serial.rs`](crates/celmesh/src/hyper_serial.rs)
+  carries NDJSON over TCP (1 s per-call timeout, 64 KiB frame cap,
+  mutex-serialized req/reply). `celctl --vm-host celhyper-serial:host:port`
+  selects it. E2E tests in
+  [`crates/celtest/tests/w22_bridge_e2e.rs`](crates/celtest/tests/w22_bridge_e2e.rs)
+  drive the full host↔kernel loop through real TCP against a
+  `LoopbackHyperLink` standing in for the on-metal serial endpoint.
 
-The control plane bridge to celhyper (a `CelhyperVmHost` that
-translates `VmOp::Start` into a real `vmlaunch`) does not exist yet.
-Today every test runs against `MemVmHost` — see [Testing
-philosophy](#testing-philosophy).
+QEMU/bare-metal validation of the kernel half lands in a later milestone.
 
 ### Quick command reference
 
