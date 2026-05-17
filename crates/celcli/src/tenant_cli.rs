@@ -11,9 +11,11 @@
 //! `celctl` open.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use celcommon::{CelError, CelResult};
 use celtenancy::{
+    exec::{self, ExecOptions},
     FileTenantStore, QuotaCharge, TenantCaps, TenantQuotas, TenantSpec, TenantStore,
 };
 use clap::{Args, Subcommand};
@@ -51,6 +53,74 @@ pub enum TenantCmd {
         #[command(subcommand)]
         op: QuotaCmd,
     },
+    /// Execute a single VmOp through a tenant-scoped
+    /// [`celtenancy::TenantVmHost`] (W29). The host is ephemeral —
+    /// state does not survive the call — but quota charges land
+    /// in the configured tenant store.
+    Exec {
+        #[command(subcommand)]
+        op: ExecCmd,
+    },
+}
+
+/// `celctl tenant exec <op>` dispatch enum.
+#[derive(Debug, Subcommand)]
+pub enum ExecCmd {
+    /// Provision a VM slot through the tenant runtime.
+    VmCreate(ExecVmCreateArgs),
+    /// Provision a volume slot through the tenant runtime.
+    VolumeCreate(ExecVolumeCreateArgs),
+}
+
+/// Shared `--tenant` / `--user` / `--release-after` arguments for
+/// every `tenant exec` subcommand.
+#[derive(Debug, Args, Clone)]
+pub struct ExecCommonArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Tenant name.
+    #[arg(long)]
+    pub tenant: String,
+    /// Optional user name; applies user-attenuated caps when set.
+    #[arg(long)]
+    pub user: Option<String>,
+    /// If true, refund the charge after a successful Create.
+    /// Turns the call into a charge-and-refund dry-run useful for
+    /// "would this op succeed right now?" checks.
+    #[arg(long, default_value_t = false)]
+    pub release_after: bool,
+    /// Emit machine-readable JSON instead of a human summary.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+/// Arguments for `tenant exec vm-create`.
+#[derive(Debug, Args, Clone)]
+pub struct ExecVmCreateArgs {
+    #[command(flatten)]
+    pub common: ExecCommonArgs,
+    /// VM label.
+    #[arg(long)]
+    pub label: String,
+    /// vCPUs requested.
+    #[arg(long, default_value_t = 1)]
+    pub cpus: u32,
+    /// Memory (MiB) requested.
+    #[arg(long, default_value_t = 512)]
+    pub memory_mib: u64,
+}
+
+/// Arguments for `tenant exec volume-create`.
+#[derive(Debug, Args, Clone)]
+pub struct ExecVolumeCreateArgs {
+    #[command(flatten)]
+    pub common: ExecCommonArgs,
+    /// Volume name.
+    #[arg(long)]
+    pub name: String,
+    /// Size in bytes.
+    #[arg(long)]
+    pub size_bytes: u64,
 }
 
 /// Operations on users inside a tenant.
@@ -259,6 +329,7 @@ pub fn run(cmd: TenantCmd) -> CelResult<()> {
         }
         TenantCmd::User { op } => run_user(op),
         TenantCmd::Quota { op } => run_quota(op),
+        TenantCmd::Exec { op } => run_exec(op),
     }
 }
 
@@ -352,5 +423,73 @@ fn apply_charge(a: QuotaChangeArgs, charge: bool) -> CelResult<()> {
         "{label}: vcpus= {}, memory_mib= {}, storage= {} B, net= {} Mbps, iops= {}",
         u.vcpus, u.memory_mib, u.storage_bytes, u.network_mbps, u.iops
     );
+    Ok(())
+}
+
+fn run_exec(op: ExecCmd) -> CelResult<()> {
+    match op {
+        ExecCmd::VmCreate(a) => dispatch_exec(
+            &a.common,
+            exec::vm_create_op(a.label, a.cpus, a.memory_mib),
+        ),
+        ExecCmd::VolumeCreate(a) => dispatch_exec(
+            &a.common,
+            exec::volume_create_op(a.name, a.size_bytes),
+        ),
+    }
+}
+
+fn dispatch_exec(common: &ExecCommonArgs, op: celmesh::VmOp) -> CelResult<()> {
+    let store: Arc<dyn TenantStore> = Arc::new(open(&common.store)?);
+    let opts = ExecOptions {
+        release_after_create: common.release_after,
+        node: None,
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| CelError::Io(format!("tokio runtime: {e}")))?;
+    let audit = rt.block_on(exec::exec(
+        store,
+        &common.tenant,
+        common.user.as_deref(),
+        op,
+        opts,
+    ))?;
+
+    if common.json {
+        let json = serde_json::to_string_pretty(&audit)
+            .map_err(|e| CelError::Storage(format!("audit json: {e}")))?;
+        println!("{json}");
+    } else {
+        let status = if audit.ok() { "ok" } else { "FAILED" };
+        println!("exec {status}: tenant={} user={:?} op={}", audit.tenant, audit.user, audit.op);
+        println!("  cap_tag       = {}", audit.op_capability_tag);
+        println!("  caps_applied  = {}", audit.effective_caps);
+        if let Some(c) = audit.planned_charge {
+            println!(
+                "  planned_charge= vcpus={} memory_mib={} storage_bytes={}",
+                c.vcpus, c.memory_mib, c.storage_bytes
+            );
+        }
+        if let Some(r) = audit.reply {
+            println!("  reply         = {r}");
+        }
+        if let Some(e) = audit.error {
+            println!("  error         = {e}");
+        }
+        println!(
+            "  usage_before  = vcpus={} memory_mib={} storage_bytes={}",
+            audit.usage_before.vcpus,
+            audit.usage_before.memory_mib,
+            audit.usage_before.storage_bytes
+        );
+        println!(
+            "  usage_after   = vcpus={} memory_mib={} storage_bytes={}",
+            audit.usage_after.vcpus,
+            audit.usage_after.memory_mib,
+            audit.usage_after.storage_bytes
+        );
+    }
     Ok(())
 }

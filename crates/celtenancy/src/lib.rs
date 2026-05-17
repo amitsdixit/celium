@@ -38,6 +38,8 @@ mod store;
 mod tenant;
 mod user;
 
+pub mod exec;
+
 pub use caps::{attenuate, TenantCaps};
 pub use namespace::TenantNamespace;
 pub use quota::{charge_quota, release_quota, QuotaCharge, QuotaUsage, TenantQuotas};

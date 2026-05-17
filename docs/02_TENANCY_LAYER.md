@@ -246,3 +246,96 @@ Layer.
    guarantees zero quota leak when the inner host rejects an op.
 5. **Delete refunds resources** — capacity reclaimed after
    `Stop` + `Delete` is fully reusable.
+
+---
+
+## W29 — Tenant Exec Dispatcher
+
+> Exposes the W28 [`TenantVmHost`] wrapper through a single-shot,
+> ephemeral-host CLI surface for diagnostics and admin
+> "would-this-op-succeed" dry-runs.
+
+### `celtenancy::exec::exec`
+
+```rust
+pub async fn exec(
+    store:       Arc<dyn TenantStore>,
+    tenant:      &str,
+    user:        Option<&str>,
+    op:          VmOp,
+    opts:        ExecOptions,
+) -> CelResult<ExecAudit>;
+```
+
+Builds an ephemeral `MemVmHost` whose `Capabilities` come from
+`TenantCaps::to_mesh_capabilities()` — root caps when `user` is
+`None`, the user's already-attenuated caps otherwise — wraps it in
+a `TenantVmHost` bound to the real `TenantStore`, dispatches one
+`VmOp`, and returns a structured [`ExecAudit`] describing every
+observable step.
+
+* The host is **ephemeral** — VMs/volumes created via `exec` do
+  not survive the call.
+* Quota charges, however, hit the **real** `TenantStore`, so a
+  successful `Create` leaves a persistent reservation behind by
+  default.
+* `ExecOptions::release_after_create = true` flips the trip into
+  an atomic charge-and-refund **dry-run** that lands the store
+  back at its starting usage — useful for "can this tenant
+  currently allocate 2 vCPUs?" probes.
+
+### `ExecAudit`
+
+`serde`-serializable. Captures the full audit trail:
+
+| field                 | meaning                                                |
+| --------------------- | ------------------------------------------------------ |
+| `tenant`, `user`      | resolved tenant + user names                           |
+| `op`                  | variant tag (`Create`, `CreateVolume`, …)              |
+| `op_capability_tag`   | the `Capabilities::op_tag` constant Core demands       |
+| `effective_caps`      | `TenantCaps::to_tags()` of the host's projected caps   |
+| `planned_charge`      | the `QuotaCharge` the wrapper planned (`None` for reads) |
+| `dispatch_succeeded`  | `true` if the inner host accepted the op               |
+| `error`               | failure string from the inner host or charge step      |
+| `reply`               | brief reply summary on success                         |
+| `usage_before/after`  | tenant `QuotaUsage` snapshots bracketing the call      |
+
+### `celctl tenant exec`
+
+```
+celctl tenant exec vm-create \
+    --tenant acme [--user alice] \
+    --label web --cpus 2 --memory-mib 1024 \
+    [--release-after] [--json]
+
+celctl tenant exec volume-create \
+    --tenant acme [--user alice] \
+    --name data --size-bytes 4096 \
+    [--release-after] [--json]
+```
+
+Both forms open the configured `FileTenantStore` (default
+`./build/celctl-tenants.json`, override with `--store`), build a
+single-threaded tokio runtime, drive `exec::exec`, and print
+either a human summary or `--json`-serialized `ExecAudit`.
+
+### Test coverage
+
+* `crates/celtenancy/src/exec.rs` — 6 unit tests (success,
+  release-after-create round-trip, quota exhaustion,
+  capability-denied refund, unknown-user error, volume charge).
+* `crates/celtest/tests/tenant_exec_e2e.rs` — 2 e2e tests
+  proving:
+  1. successful Create through `FileTenantStore` persists the
+     reservation across process restarts;
+  2. `release_after_create` round-trip leaves disk state at
+     baseline (charge-and-refund dry-run).
+
+### Limitations / out of scope for W29
+
+* The host is per-invocation — there is **no** cross-call VM or
+  volume state. `tenant exec vm-delete` would have nothing to
+  delete; we deliberately omit it.
+* Cluster-wide live-host integration (i.e. dispatching through a
+  real running Core-Layer node instead of an ephemeral host)
+  remains future work.

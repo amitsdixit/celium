@@ -150,6 +150,7 @@ dependencies = [
  "celcommon",
  "celmesh",
  "celtenancy",
+ "tempfile",
  "tokio",
  "tracing",
 ]

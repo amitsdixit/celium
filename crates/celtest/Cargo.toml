@@ -16,3 +16,4 @@ tracing   = { workspace = true }
 celmesh    = { workspace = true }
 celtenancy = { workspace = true }
 tokio      = { workspace = true }
+tempfile   = "3"
