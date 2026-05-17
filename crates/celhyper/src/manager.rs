@@ -199,6 +199,39 @@ pub fn stop_vm(id: VmId) -> HyperResult<()> {
     vm.stop()
 }
 
+/// Marks `id` as no longer referenced by the bridge.
+///
+/// The underlying [`Vm`] cell lives in a `spin::Once` and cannot be
+/// dropped in-place safely without first proving no exit dispatcher
+/// still holds a `&'static Vm` to it. W22 chooses the conservative
+/// path: the slot stays *physically* allocated (the kernel never
+/// reuses it), but it is marked *logically* deleted so future
+/// [`list_vms`] snapshots skip it and a re-`Create` of the same id
+/// is rejected with [`HyperError::Denied`]. Reusing storage will
+/// land alongside the multi-core scheduler refactor.
+///
+/// Returns [`HyperError::Invalid`] if the VM is not in a terminal
+/// state — matching the host wire contract enforced by
+/// `LoopbackHyperLink`.
+pub fn delete_vm(id: VmId) -> HyperResult<()> {
+    use core::sync::atomic::Ordering;
+    let vm = lookup(id)?;
+    if !vm.state().is_terminal() {
+        return Err(HyperError::Invalid("manager: vm not terminal"));
+    }
+    let bit = 1u32 << (id.0 as usize);
+    if DELETED.fetch_or(bit, Ordering::SeqCst) & bit != 0 {
+        return Err(HyperError::Denied("manager: vm already deleted"));
+    }
+    Ok(())
+}
+
+/// Per-VM "logically deleted" bitmap. Bit `i` set ⇒ slot `i` was
+/// returned to the namespace via [`delete_vm`] and should be hidden
+/// from [`list_vms`].
+static DELETED: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
 /// Inspect a VM's current lifecycle state.
 pub fn vm_state(id: VmId) -> HyperResult<VmState> {
     Ok(lookup(id)?.state())
@@ -233,11 +266,18 @@ pub struct VmListEntry {
 /// Returns a fixed-size buffer plus the number of populated entries.
 /// We avoid heap allocation entirely so the API is callable from the
 /// no-std kernel and from any future capability-gated IPC path.
+/// Slots that have been logically deleted via [`delete_vm`] are
+/// omitted from the snapshot.
 #[must_use]
 pub fn list_vms() -> ([Option<VmListEntry>; MAX_VMS], usize) {
+    use core::sync::atomic::Ordering;
+    let deleted = DELETED.load(Ordering::SeqCst);
     let mut out: [Option<VmListEntry>; MAX_VMS] = [None; MAX_VMS];
     let mut n = 0;
     for (i, slot) in REGISTRY.iter().enumerate() {
+        if deleted & (1 << i) != 0 {
+            continue;
+        }
         if let Some(vm) = slot.get() {
             out[i] = Some(VmListEntry {
                 id:        VmId(i as u32),

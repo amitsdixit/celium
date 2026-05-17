@@ -17,3 +17,8 @@ Thumbs.db
 *.img
 *.iso
 *.efi.bak
+clippy-*.log
+test-w22b*.log
+w18p*.filelist
+w18p*.tar
+w18p*_test*.sh

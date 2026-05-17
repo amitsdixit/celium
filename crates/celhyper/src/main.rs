@@ -8,7 +8,7 @@
 #![cfg_attr(not(test), forbid(unsafe_op_in_unsafe_fn))]
 
 #[cfg(not(test))]
-use celhyper::{bringup, handoff::CeliumHandoff, halt, logger};
+use celhyper::{bridge, bringup, handoff::CeliumHandoff, halt, logger};
 
 #[cfg(not(test))]
 #[no_mangle]
@@ -29,9 +29,14 @@ pub extern "C" fn _start(handoff_phys: *const CeliumHandoff) -> ! {
     if let Err(e) = bringup::bring_up(&handoff) {
         logger::log("celhyper: bring_up failed");
         let _ = e;
+        halt()
     }
 
-    halt()
+    // W22-B-2: bring_up returns once VMX is live and the runtime is
+    // ready. From here we enter the kernel-side IPC bridge, which
+    // owns COM1 RX and drives `manager::{create,start,stop,delete}_vm`
+    // on behalf of the host control plane (`celmesh::SerialHyperLink`).
+    bridge::run()
 }
 
 // Test build needs an entry symbol of some shape. libtest provides its

@@ -37,13 +37,18 @@ pub mod mm;
 pub mod sched;
 pub mod vm;
 pub mod vmx;
+pub mod wire;
 
+#[cfg(not(test))]
+pub mod bridge;
 #[cfg(not(test))]
 pub mod bringup;
 #[cfg(not(test))]
 pub mod host_gdt;
 #[cfg(not(test))]
 pub mod manager;
+#[cfg(not(test))]
+pub mod serial_io;
 
 pub use error::{HyperError, HyperResult};
 
