@@ -322,6 +322,14 @@ struct StartArgs {
     /// to converge before printing.
     #[arg(long, default_value_t = 1)]
     settle: u64,
+    /// W21: bind a lightweight admin HTTP server on this address
+    /// and expose `GET /metrics`, `GET /healthz`, `GET /readyz`.
+    /// Empty string disables the server (default). Use e.g.
+    /// `127.0.0.1:9100` for local scraping or `0.0.0.0:9100` to
+    /// expose to the rack. The server is a single zero-overhead
+    /// tokio task off the gossip hot path.
+    #[arg(long, default_value = "")]
+    admin_addr: String,
 }
 
 /// Operands for `cluster invoke`. Wraps `StartArgs` plus the target
@@ -723,6 +731,16 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
     println!("celctl: node {} listening on {} (seeds={:?})",
              args.node_id, args.bind, parse_seeds(&args.seeds));
 
+    // W21: optional admin HTTP server. Empty string disables.
+    let admin = if args.admin_addr.is_empty() {
+        None
+    } else {
+        let srv = celmesh::AdminServer::bind(mesh.clone(), &args.admin_addr).await?;
+        println!("celctl: admin server on http://{}/  (/metrics /healthz /readyz)",
+                 srv.addr);
+        Some(srv)
+    };
+
     let stop_after = if args.duration == 0 { None }
                      else                   { Some(Duration::from_secs(args.duration)) };
     if let Some(d) = stop_after {
@@ -733,6 +751,7 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
         // no recovery path other than exit.
         let _ = tokio::signal::ctrl_c().await;
     }
+    if let Some(srv) = admin { srv.shutdown(); }
     let _ = mesh.shutdown().await;
     Ok(())
 }

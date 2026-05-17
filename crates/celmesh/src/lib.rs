@@ -26,6 +26,7 @@
 #![warn(missing_docs, rust_2018_idioms)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod admin;
 pub mod federation;
 pub mod host;
 pub mod k8s;
@@ -37,6 +38,7 @@ pub mod proto;
 pub mod transport;
 pub mod capabilities;
 
+pub use admin::AdminServer;
 pub use capabilities::Capabilities;
 
 pub use federation::{NamespaceFederation, RemoteVm, RestartPolicy};
