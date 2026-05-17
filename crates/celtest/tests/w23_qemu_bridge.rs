@@ -102,6 +102,10 @@ async fn live_qemu_bridge_lists_bringup_vms() {
         .handle(VmOp::Create {
             label: "w23-live".into(),
             restart_policy: celmesh::RestartPolicy::Never,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         })
         .await
         .expect("Create through live bridge");

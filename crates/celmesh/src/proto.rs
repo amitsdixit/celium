@@ -98,13 +98,32 @@ pub enum Payload {
 pub enum VmOp {
     /// Allocate a VM with `label`. Optional `restart_policy`
     /// controls whether the supervisor will attempt to recreate the
-    /// VM elsewhere on owner failure.
+    /// VM elsewhere on owner failure. The four optional metadata
+    /// fields (`image_path`, `cpu_count`, `memory_mib`,
+    /// `boot_blob_crc32c`) are W22-v2 additions: they are
+    /// `#[serde(default)]` so v1 peers still decode, and they ride
+    /// through the kernel bridge so a controller sees the same view
+    /// the kernel sees.
     Create {
         /// Free-form label, ≤ 32 chars.
         label: String,
         /// Default `Never`.
         #[serde(default)]
         restart_policy: crate::federation::RestartPolicy,
+        /// Host-visible image path the controller wants the kernel
+        /// to load. Carried verbatim; the kernel does not load it
+        /// today.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image_path: Option<String>,
+        /// vCPU count the controller wants the kernel to honour.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cpu_count: Option<u32>,
+        /// Guest memory in MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        memory_mib: Option<u64>,
+        /// CRC32C of the staged boot blob, if computed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boot_blob_crc32c: Option<u32>,
     },
     /// Move VM `vm_id` to `Halted` (single-step run).
     Start {

@@ -176,6 +176,19 @@ struct VmCreateArgs {
     /// Restart policy: `never` or `always`.
     #[arg(long, default_value = "never")]
     restart: String,
+    /// W22-v2: optional host-visible image path. Carried verbatim
+    /// to the kernel bridge; the kernel does not load it today.
+    #[arg(long)]
+    image_path: Option<String>,
+    /// W22-v2: optional vCPU count.
+    #[arg(long)]
+    cpu_count: Option<u32>,
+    /// W22-v2: optional guest memory in MiB.
+    #[arg(long)]
+    memory_mib: Option<u64>,
+    /// W22-v2: optional CRC32C of the already-staged boot blob.
+    #[arg(long)]
+    boot_blob_crc32c: Option<u32>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -331,12 +344,17 @@ struct StartArgs {
     #[arg(long, default_value = "")]
     admin_addr: String,
     /// W22: which VmHost backend to register on the mesh.
-    /// `mem` (default) uses the in-process `MemVmHost`; `celhyper`
-    /// uses the CelHyper bridge with a `LoopbackHyperLink` (kernel
-    /// state-machine simulator) so the bridge code path is
-    /// exercised end-to-end. Future values: `celhyper-serial:<addr>`,
-    /// `celhyper-vsock:<cid:port>`.
-    #[arg(long, default_value = "mem")]
+    /// `auto` (default) picks `celhyper-serial:` from the
+    /// `CELIUM_BRIDGE_TCP` env var if it is set and falls back to
+    /// `mem` otherwise -- this is what lets `celctl cluster start`
+    /// light up the real kernel path the moment QEMU is wired in
+    /// without forcing a flag. Other values: `mem` for the
+    /// in-process `MemVmHost`; `celhyper` for the CelHyper bridge
+    /// with a `LoopbackHyperLink` (kernel state-machine simulator);
+    /// `celhyper-serial:<host:port>` for a real kernel bridge over
+    /// TCP (runs the host in strict mode -- non-lifecycle ops fail
+    /// loudly instead of falling back to the in-process model).
+    #[arg(long, default_value = "auto")]
     vm_host: String,
 }
 
@@ -722,9 +740,27 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
     // W22: select the VmHost backend. `mem` keeps the existing
     // in-process model; `celhyper` routes VM lifecycle through the
     // CelHyper bridge with a LoopbackHyperLink (Phase A) so the
-    // bridge code is exercised end-to-end. Future variants will
-    // accept `celhyper-serial:<host:port>` etc.
-    let host: Arc<dyn VmHost> = match args.vm_host.as_str() {
+    // bridge code is exercised end-to-end. `celhyper-serial:host:port`
+    // connects to a real kernel bridge over TCP. `auto` picks
+    // `celhyper-serial:` from the `CELIUM_BRIDGE_TCP` env var if it
+    // is set and falls back to `mem` otherwise — this is the
+    // default so `celctl cluster start` lights up the real kernel
+    // path the moment QEMU is wired in, without forcing a flag.
+    let resolved_vm_host: std::borrow::Cow<'_, str> = if args.vm_host == "auto" {
+        match std::env::var("CELIUM_BRIDGE_TCP") {
+            Ok(addr) if !addr.is_empty() => {
+                println!("celctl: vm-host=auto → celhyper-serial:{addr} (CELIUM_BRIDGE_TCP)");
+                format!("celhyper-serial:{addr}").into()
+            }
+            _ => {
+                println!("celctl: vm-host=auto → mem (CELIUM_BRIDGE_TCP unset)");
+                "mem".into()
+            }
+        }
+    } else {
+        args.vm_host.as_str().into()
+    };
+    let host: Arc<dyn VmHost> = match resolved_vm_host.as_ref() {
         "mem" => Arc::new(MemVmHost::new()),
         "celhyper" => {
             println!("celctl: vm-host=celhyper (loopback kernel sim)");
@@ -739,13 +775,17 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
                     "--vm-host celhyper-serial: requires host:port",
                 ));
             }
-            println!("celctl: vm-host=celhyper-serial connecting to {addr}");
+            println!("celctl: vm-host=celhyper-serial connecting to {addr} (strict)");
             let serial = celmesh::SerialHyperLink::connect(addr).await?;
             let link: Arc<dyn celmesh::HyperLink> = Arc::new(serial);
-            Arc::new(celmesh::CelhyperVmHost::new(link))
+            // Real kernel bridges only implement VM lifecycle; flip
+            // strict mode so a controller asking for a volume gets
+            // a loud error instead of a silent fallback that the
+            // kernel never sees.
+            Arc::new(celmesh::CelhyperVmHost::new(link).with_strict(true))
         }
         _ => return Err(CelError::Invalid(
-            "unknown --vm-host (try mem | celhyper | celhyper-serial:host:port)",
+            "unknown --vm-host (try mem | celhyper | celhyper-serial:host:port | auto)",
         )),
     };
     mesh.set_host(host.clone()).await;
@@ -756,6 +796,10 @@ async fn cluster_start(state_path: &std::path::Path, args: StartArgs) -> CelResu
         let _ = host.handle(VmOp::Create {
             label: r.label.clone(),
             restart_policy: RestartPolicy::Never,
+            image_path: r.image_path.clone(),
+            cpu_count: r.cpu_count,
+            memory_mib: r.memory_mib,
+            boot_blob_crc32c: r.boot_blob_crc32c,
         }).await;
     }
     let snapshot = host.snapshot(&owner).await;
@@ -848,7 +892,14 @@ async fn cluster_invoke(args: InvokeArgs) -> CelResult<()> {
         )),
     };
     let op = match args.op.as_str() {
-        "create" => VmOp::Create { label: args.label.clone(), restart_policy: restart },
+        "create" => VmOp::Create {
+            label: args.label.clone(),
+            restart_policy: restart,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
+        },
         "start"  => VmOp::Start  { vm_id: args.vm_id },
         "stop"   => VmOp::Stop   { vm_id: args.vm_id },
         "delete" => VmOp::Delete { vm_id: args.vm_id },
@@ -1138,7 +1189,14 @@ async fn cluster_vm_cmd(op: ClusterVmCmd) -> CelResult<()> {
                 let target = NodeId(args.rpc.target.clone());
                 let reply = mesh.invoke(
                     &target,
-                    VmOp::Create { label: args.label.clone(), restart_policy: restart },
+                    VmOp::Create {
+                        label: args.label.clone(),
+                        restart_policy: restart,
+                        image_path: args.image_path.clone(),
+                        cpu_count: args.cpu_count,
+                        memory_mib: args.memory_mib,
+                        boot_blob_crc32c: args.boot_blob_crc32c,
+                    },
                     Duration::from_millis(args.rpc.timeout_ms),
                 ).await?;
                 if let VmOpReply::Created { vm_id } = reply {

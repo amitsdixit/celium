@@ -80,13 +80,31 @@ pub mod wire {
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(tag = "op", rename_all = "snake_case")]
     pub enum HyperRequest {
-        /// Allocate a VM slot with `label`. The kernel does not
-        /// itself store the label; the host adapter mirrors it for
-        /// gossip purposes. Returns [`HyperReply::Created`].
+        /// Allocate a VM slot with `label` and an optional image /
+        /// config payload (W22-v2). The kernel does not itself load
+        /// the image today — the canned `HELLO_BLOB` guest still
+        /// runs — but it stores the metadata in its row table so
+        /// `List` can echo it back, which closes the drift-detection
+        /// loop between the controller's federation gossip and the
+        /// kernel's view of the world ahead of the loader landing.
         Create {
             /// Free-form label, ≤ 32 chars. Validated by the host
             /// adapter before send so the kernel never has to.
             label: String,
+            /// Host-visible path the controller would load if/when
+            /// the kernel supports image staging. Carried verbatim.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            image_path: Option<String>,
+            /// vCPU count the controller wants the kernel to honour.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            cpu_count: Option<u32>,
+            /// Guest memory in MiB.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            memory_mib: Option<u64>,
+            /// CRC32C of the staged boot blob, if the controller
+            /// already computed one.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            boot_blob_crc32c: Option<u32>,
         },
         /// `vmlaunch` slot `vm_id`. The kernel returns once the guest
         /// has exited (HLT in the canned-guest path). Returns
@@ -157,6 +175,18 @@ pub mod wire {
         /// Last guest exit code, if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub last_exit: Option<u32>,
+        /// Host-visible image path forwarded from `Create`, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub image_path: Option<String>,
+        /// vCPU count forwarded from `Create`, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub cpu_count: Option<u32>,
+        /// Guest memory MiB forwarded from `Create`, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub memory_mib: Option<u64>,
+        /// Boot-blob CRC32C forwarded from `Create`, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub boot_blob_crc32c: Option<u32>,
     }
 }
 
@@ -202,6 +232,10 @@ struct LoopSlot {
     label: String,
     state: &'static str,
     last_exit: Option<u32>,
+    image_path: Option<String>,
+    cpu_count: Option<u32>,
+    memory_mib: Option<u64>,
+    boot_blob_crc32c: Option<u32>,
 }
 
 impl Default for LoopbackHyperLink {
@@ -220,9 +254,14 @@ impl LoopbackHyperLink {
     pub fn apply(&self, req: HyperRequest) -> CelResult<HyperReply> {
         let mut slots = lock_or_recover(&self.slots);
         match req {
-            HyperRequest::Create { label } => {
+            HyperRequest::Create { label, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
                 if label.len() > 32 {
                     return Err(CelError::Invalid("hyper: label > 32 chars"));
+                }
+                if let Some(p) = image_path.as_deref() {
+                    if p.len() > 128 {
+                        return Err(CelError::Invalid("hyper: image_path > 128 chars"));
+                    }
                 }
                 for (i, s) in slots.iter_mut().enumerate() {
                     if s.is_none() {
@@ -230,6 +269,10 @@ impl LoopbackHyperLink {
                             label,
                             state: "created",
                             last_exit: None,
+                            image_path,
+                            cpu_count,
+                            memory_mib,
+                            boot_blob_crc32c,
                         });
                         // SAFETY-comment scope only: `i` is bounded by
                         // HYPER_MAX_VMS ≤ u32::MAX, so the cast is
@@ -291,6 +334,10 @@ impl LoopbackHyperLink {
                             label: s.label.clone(),
                             state: s.state.to_string(),
                             last_exit: s.last_exit,
+                            image_path: s.image_path.clone(),
+                            cpu_count: s.cpu_count,
+                            memory_mib: s.memory_mib,
+                            boot_blob_crc32c: s.boot_blob_crc32c,
                         });
                     }
                 }
@@ -344,6 +391,41 @@ fn slot_mut(
         .ok_or(CelError::Invalid("hyper: vm not allocated"))
 }
 
+/// Short, stable name of a [`VmOp`] variant. Used for clearer
+/// error messages in [`CelhyperVmHost`] strict mode.
+fn op_kind(op: &VmOp) -> &'static str {
+    match op {
+        VmOp::Create { .. }            => "Create",
+        VmOp::Start  { .. }            => "Start",
+        VmOp::Stop   { .. }            => "Stop",
+        VmOp::Delete { .. }            => "Delete",
+        VmOp::List                     => "List",
+        VmOp::CreateVolume   { .. }    => "CreateVolume",
+        VmOp::DeleteVolume   { .. }    => "DeleteVolume",
+        VmOp::ListVolumes              => "ListVolumes",
+        VmOp::AttachVolume   { .. }    => "AttachVolume",
+        VmOp::DetachVolume   { .. }    => "DetachVolume",
+        VmOp::ReadVolume     { .. }    => "ReadVolume",
+        VmOp::WriteVolume    { .. }    => "WriteVolume",
+        VmOp::CreateSnapshot  { .. }   => "CreateSnapshot",
+        VmOp::ListSnapshots   { .. }   => "ListSnapshots",
+        VmOp::DeleteSnapshot  { .. }   => "DeleteSnapshot",
+        VmOp::RestoreSnapshot { .. }   => "RestoreSnapshot",
+        VmOp::CreateNetwork  { .. }    => "CreateNetwork",
+        VmOp::DeleteNetwork  { .. }    => "DeleteNetwork",
+        VmOp::ListNetworks             => "ListNetworks",
+        VmOp::AttachNic      { .. }    => "AttachNic",
+        VmOp::DetachNic      { .. }    => "DetachNic",
+        VmOp::ListNics                 => "ListNics",
+        VmOp::CreateSecurityGroup { .. } => "CreateSecurityGroup",
+        VmOp::DeleteSecurityGroup { .. } => "DeleteSecurityGroup",
+        VmOp::ListSecurityGroups       => "ListSecurityGroups",
+        VmOp::CreateLoadBalancer  { .. } => "CreateLoadBalancer",
+        VmOp::DeleteLoadBalancer  { .. } => "DeleteLoadBalancer",
+        VmOp::ListLoadBalancers        => "ListLoadBalancers",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CelhyperVmHost — the VmHost adapter.
 // ---------------------------------------------------------------------------
@@ -368,6 +450,13 @@ pub struct CelhyperVmHost {
     /// Slot-id → restart policy mirror. Used so `snapshot` can emit
     /// the correct policy in each `RemoteVm` row.
     policies: Mutex<BTreeMap<u32, RestartPolicy>>,
+    /// When `true`, every non-lifecycle [`VmOp`] is rejected instead
+    /// of being silently delegated to the in-process [`MemVmHost`].
+    /// Set this when the link is a real kernel bridge so a
+    /// controller asking for a volume / network / snapshot fails
+    /// loudly rather than mutating only host-side memory that the
+    /// kernel never sees.
+    strict: bool,
 }
 
 impl CelhyperVmHost {
@@ -380,8 +469,24 @@ impl CelhyperVmHost {
             fallback: MemVmHost::new(),
             labels: Mutex::new(BTreeMap::new()),
             policies: Mutex::new(BTreeMap::new()),
+            strict: false,
         }
     }
+
+    /// Toggle strict mode. In strict mode, any [`VmOp`] that the
+    /// kernel bridge does not (yet) implement — volumes, networks,
+    /// snapshots, security groups, load balancers — fails with a
+    /// clear error instead of being silently routed to the embedded
+    /// [`MemVmHost`]. Use this when `link` is a real serial bridge.
+    #[must_use]
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
+
+    /// Whether strict mode is on.
+    #[must_use]
+    pub fn strict(&self) -> bool { self.strict }
 
     /// Replace the capability set on the contained fallback (volumes,
     /// networks, …). Returns `self` so it composes with `new`.
@@ -423,11 +528,17 @@ impl VmHost for CelhyperVmHost {
     fn handle<'a>(&'a self, op: VmOp) -> HostFut<'a, HostResult> {
         Box::pin(async move {
             match op {
-                VmOp::Create { label, restart_policy } => {
+                VmOp::Create { label, restart_policy, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
                     let label_for_mirror = label.clone();
                     let reply = self
                         .link
-                        .call(HyperRequest::Create { label })
+                        .call(HyperRequest::Create {
+                            label,
+                            image_path,
+                            cpu_count,
+                            memory_mib,
+                            boot_blob_crc32c,
+                        })
                         .await
                         .map_err(|e| format!("hyper: {e:?}"))?;
                     let HyperReply::Created { vm_id } = reply else {
@@ -478,8 +589,19 @@ impl VmHost for CelhyperVmHost {
                 }
                 // Everything else flows through MemVmHost so volume,
                 // network, snapshot, security-group and LB ops keep
-                // working unchanged.
-                other => self.fallback.handle(other).await,
+                // working unchanged — *unless* strict mode is on, in
+                // which case we fail loudly so the controller can
+                // see the kernel doesn't (yet) implement them.
+                other => {
+                    if self.strict {
+                        Err(format!(
+                            "hyper: bridge does not implement {} (strict mode)",
+                            op_kind(&other)
+                        ))
+                    } else {
+                        self.fallback.handle(other).await
+                    }
+                }
             }
         })
     }
@@ -515,10 +637,10 @@ impl VmHost for CelhyperVmHost {
                     epoch: 0,
                     hlc: 0,
                     volumes: Vec::new(),
-                    image_path: None,
-                    cpu_count: None,
-                    memory_mib: None,
-                    boot_blob_crc32c: None,
+                    image_path: r.image_path,
+                    cpu_count: r.cpu_count,
+                    memory_mib: r.memory_mib,
+                    boot_blob_crc32c: r.boot_blob_crc32c,
                 })
                 .collect()
         })
@@ -549,7 +671,14 @@ mod tests {
 
         // create
         let r = host
-            .handle(VmOp::Create { label: "guest-a".into(), restart_policy: RestartPolicy::Never })
+            .handle(VmOp::Create {
+                label: "guest-a".into(),
+                restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
+            })
             .await
             .unwrap();
         let VmOpReply::Created { vm_id } = r else { panic!("create reply") };
@@ -584,7 +713,14 @@ mod tests {
         let host = CelhyperVmHost::new(link());
         let big = "x".repeat(33);
         let err = host
-            .handle(VmOp::Create { label: big, restart_policy: RestartPolicy::Never })
+            .handle(VmOp::Create {
+                label: big,
+                restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
+            })
             .await
             .expect_err("oversized label must be rejected");
         assert!(err.contains("32 chars"), "err={err}");
@@ -595,13 +731,27 @@ mod tests {
         let host = CelhyperVmHost::new(link());
         for i in 0..HYPER_MAX_VMS {
             let r = host
-                .handle(VmOp::Create { label: format!("g{i}"), restart_policy: RestartPolicy::Never })
+                .handle(VmOp::Create {
+                    label: format!("g{i}"),
+                    restart_policy: RestartPolicy::Never,
+                    image_path: None,
+                    cpu_count: None,
+                    memory_mib: None,
+                    boot_blob_crc32c: None,
+                })
                 .await
                 .unwrap();
             assert!(matches!(r, VmOpReply::Created { .. }));
         }
         let err = host
-            .handle(VmOp::Create { label: "overflow".into(), restart_policy: RestartPolicy::Never })
+            .handle(VmOp::Create {
+                label: "overflow".into(),
+                restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
+            })
             .await
             .expect_err("registry must be full");
         assert!(err.contains("registry full"), "err={err}");
@@ -611,7 +761,14 @@ mod tests {
     async fn loopback_start_on_terminal_is_an_error() {
         let host = CelhyperVmHost::new(link());
         let _ = host
-            .handle(VmOp::Create { label: "g".into(), restart_policy: RestartPolicy::Never })
+            .handle(VmOp::Create {
+                label: "g".into(),
+                restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
+            })
             .await
             .unwrap();
         let _ = host.handle(VmOp::Start { vm_id: 0 }).await.unwrap();
@@ -627,7 +784,13 @@ mod tests {
         // The LoopbackHyperLink itself round-trips through serde on
         // every call; this test pins the wire shape explicitly so
         // the kernel-side decoder (W22-B) has a contract to match.
-        let req = HyperRequest::Create { label: "rt".into() };
+        let req = HyperRequest::Create {
+            label: "rt".into(),
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
+        };
         let s = serde_json::to_string(&req).unwrap();
         assert!(s.contains(r#""op":"create""#), "encoded: {s}");
         let back: HyperRequest = serde_json::from_str(&s).unwrap();
@@ -642,6 +805,42 @@ mod tests {
         assert!(s.contains(r#""reply":"state""#), "encoded: {s}");
         let back: HyperReply = serde_json::from_str(&s).unwrap();
         assert_eq!(back, reply);
+    }
+
+    #[tokio::test]
+    async fn create_metadata_round_trips_through_snapshot() {
+        let host = CelhyperVmHost::new(link());
+        let owner = NodeId("nM".into());
+        let r = host
+            .handle(VmOp::Create {
+                label: "meta".into(),
+                restart_policy: RestartPolicy::Never,
+                image_path: Some("/img/x.raw".into()),
+                cpu_count: Some(2),
+                memory_mib: Some(512),
+                boot_blob_crc32c: Some(0xDEAD_BEEF),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(r, VmOpReply::Created { vm_id: 0 }));
+        let snap = host.snapshot(&owner).await;
+        assert_eq!(snap.len(), 1);
+        let row = &snap[0];
+        assert_eq!(row.image_path.as_deref(), Some("/img/x.raw"));
+        assert_eq!(row.cpu_count, Some(2));
+        assert_eq!(row.memory_mib, Some(512));
+        assert_eq!(row.boot_blob_crc32c, Some(0xDEAD_BEEF));
+    }
+
+    #[tokio::test]
+    async fn strict_mode_rejects_non_lifecycle_ops() {
+        let host = CelhyperVmHost::new(link()).with_strict(true);
+        let err = host
+            .handle(VmOp::CreateVolume { name: "v1".into(), size_bytes: 64 * 1024 })
+            .await
+            .expect_err("strict mode must reject volumes");
+        assert!(err.contains("strict mode"), "err={err}");
+        assert!(err.contains("CreateVolume"), "err={err}");
     }
 
     #[tokio::test]

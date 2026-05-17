@@ -116,6 +116,10 @@ async fn persistent_volume_survives_restart_and_snapshot_round_trip() {
                 VmOp::Create {
                     label: "guest".into(),
                     restart_policy: RestartPolicy::Never,
+                    image_path: None,
+                    cpu_count: None,
+                    memory_mib: None,
+                    boot_blob_crc32c: None,
                 },
                 Duration::from_millis(2_000),
             )

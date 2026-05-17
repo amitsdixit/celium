@@ -227,6 +227,10 @@ mod tests {
             Capabilities::required(&VmOp::Create {
                 label: "x".into(),
                 restart_policy: crate::federation::RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
             }),
             Capabilities::VM_LIFECYCLE_WRITE
         );

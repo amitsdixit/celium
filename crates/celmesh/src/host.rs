@@ -78,6 +78,13 @@ struct Slot {
     /// Week-12: volume attachments. Preserved across supervisor
     /// restarts so a recreated VM keeps its persistent volumes.
     volumes: Vec<VolumeAttachment>,
+    /// W22-v2: optional image / config metadata carried verbatim
+    /// from `VmOp::Create`. Surfaced through `snapshot` so federated
+    /// peers see the same view a real kernel bridge would expose.
+    image_path: Option<String>,
+    cpu_count: Option<u32>,
+    memory_mib: Option<u64>,
+    boot_blob_crc32c: Option<u32>,
 }
 
 /// Reference in-memory `VmHost`.
@@ -204,7 +211,7 @@ impl MemVmHost {
         tracing::debug!(target: "celmesh::host", op = tag, "apply");
         match op {
             // -- VM lifecycle ---------------------------------------------
-            VmOp::Create { label, restart_policy } => {
+            VmOp::Create { label, restart_policy, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
                 let mut slots = self.lock_slots();
                 if label.len() > 32 {
                     return Err("label > 32 chars".into());
@@ -217,6 +224,10 @@ impl MemVmHost {
                             last_exit: None,
                             restart_policy,
                             volumes: Vec::new(),
+                            image_path,
+                            cpu_count,
+                            memory_mib,
+                            boot_blob_crc32c,
                         });
                         return Ok(VmOpReply::Created { vm_id: i as u32 });
                     }
@@ -460,11 +471,10 @@ impl MemVmHost {
                 owner_alive: true,
                 restart_policy: s.restart_policy,
                 volumes: s.volumes.clone(),
-                // MemVmHost has no image-aware fields; leave as None.
-                image_path: None,
-                cpu_count: None,
-                memory_mib: None,
-                boot_blob_crc32c: None,
+                image_path: s.image_path.clone(),
+                cpu_count: s.cpu_count,
+                memory_mib: s.memory_mib,
+                boot_blob_crc32c: s.boot_blob_crc32c,
             }
         })).collect()
     }
@@ -508,6 +518,10 @@ mod tests {
         let id = match block(h.handle(VmOp::Create {
             label: "alpha".into(),
             restart_policy: RestartPolicy::Always,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         })).unwrap() {
             VmOpReply::Created { vm_id } => vm_id,
             r => panic!("unexpected: {r:?}"),
@@ -524,9 +538,23 @@ mod tests {
     fn registry_full_is_explicit() {
         let h = MemVmHost::new();
         for _ in 0..MAX_SLOTS {
-            block(h.handle(VmOp::Create { label: "x".into(), restart_policy: RestartPolicy::Never })).unwrap();
+            block(h.handle(VmOp::Create {
+                label: "x".into(),
+                restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
+            })).unwrap();
         }
-        let r = block(h.handle(VmOp::Create { label: "y".into(), restart_policy: RestartPolicy::Never }));
+        let r = block(h.handle(VmOp::Create {
+            label: "y".into(),
+            restart_policy: RestartPolicy::Never,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
+        }));
         assert!(matches!(r, Err(s) if s.contains("full")));
     }
 
@@ -539,6 +567,10 @@ mod tests {
         let vm = match block(h.handle(VmOp::Create {
             label: "with-vol".into(),
             restart_policy: RestartPolicy::Never,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         })).unwrap() {
             VmOpReply::Created { vm_id } => vm_id,
             r => panic!("unexpected: {r:?}"),

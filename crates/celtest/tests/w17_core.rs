@@ -102,6 +102,10 @@ async fn mesh_metrics_increment_under_real_traffic() {
     let reply = m1.invoke(&n2, VmOp::Create {
         label: "alpha".into(),
         restart_policy: RestartPolicy::Never,
+        image_path: None,
+        cpu_count: None,
+        memory_mib: None,
+        boot_blob_crc32c: None,
     }, Duration::from_secs(2)).await.expect("rpc must succeed");
     assert!(matches!(reply, VmOpReply::Created { .. }), "unexpected reply: {reply:?}");
 

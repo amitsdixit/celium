@@ -149,7 +149,7 @@ impl K8sCluster {
         let cp_label = format!("k8s-cp-{}", spec.name);
         let cp_vm_id = match mesh.invoke(
             owner,
-            VmOp::Create { label: cp_label.clone(), restart_policy: RestartPolicy::Always },
+            VmOp::Create { label: cp_label.clone(), restart_policy: RestartPolicy::Always, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None },
             rpc_timeout,
         ).await? {
             VmOpReply::Created { vm_id } => vm_id,
@@ -179,7 +179,7 @@ impl K8sCluster {
             let label = format!("k8s-worker-{}-{i}", spec.name);
             let vm_id = match mesh.invoke(
                 owner,
-                VmOp::Create { label: label.clone(), restart_policy: RestartPolicy::Always },
+                VmOp::Create { label: label.clone(), restart_policy: RestartPolicy::Always, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None },
                 rpc_timeout,
             ).await? {
                 VmOpReply::Created { vm_id } => vm_id,

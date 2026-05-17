@@ -76,7 +76,7 @@ async fn udp_three_nodes_guest_lifecycle_via_path() {
     // n2 → n1: Create.
     let created = n2.invoke(
         &NodeId::from("n1"),
-        VmOp::Create { label: "udp-guest".into(), restart_policy: RestartPolicy::Never },
+        VmOp::Create { label: "udp-guest".into(), restart_policy: RestartPolicy::Never, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None },
         Duration::from_millis(3_000),
     ).await.expect("create");
     let vm_id = match created {
@@ -148,7 +148,7 @@ async fn udp_auto_supervisor_restarts_orphan() {
     // Create a VM on n2 with restart_policy=Always.
     let created = n3.invoke(
         &NodeId::from("n2"),
-        VmOp::Create { label: "phoenix".into(), restart_policy: RestartPolicy::Always },
+        VmOp::Create { label: "phoenix".into(), restart_policy: RestartPolicy::Always, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None },
         Duration::from_millis(3_000),
     ).await.expect("create on n2");
     let vm_id = match created {

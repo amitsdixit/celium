@@ -535,6 +535,10 @@ impl Mesh {
             let reply = host.handle(VmOp::Create {
                 label: new_label.clone(),
                 restart_policy: RestartPolicy::Never,
+                image_path: orphan.image_path.clone(),
+                cpu_count: orphan.cpu_count,
+                memory_mib: orphan.memory_mib,
+                boot_blob_crc32c: orphan.boot_blob_crc32c,
             }).await.map_err(|s| CelError::Io(format!("supervisor create: {s}")))?;
             if let VmOpReply::Created { vm_id } = reply {
                 // Week-12: preserve volume attachments across the

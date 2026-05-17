@@ -97,6 +97,10 @@ async fn vm_lifecycle_with_persistent_volume_survives_restart() {
             VmOp::Create {
                 label: "guest".into(),
                 restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
             },
             Duration::from_millis(2_000),
         ).await.unwrap() {
@@ -145,7 +149,7 @@ async fn vm_lifecycle_with_persistent_volume_survives_restart() {
             .await.unwrap();
         let restarted_id = match m1.invoke(
             &n2_id,
-            VmOp::Create { label: "guest".into(), restart_policy: RestartPolicy::Never },
+            VmOp::Create { label: "guest".into(), restart_policy: RestartPolicy::Never, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None },
             Duration::from_millis(2_000),
         ).await.unwrap() {
             VmOpReply::Created { vm_id } => vm_id,
@@ -258,7 +262,7 @@ async fn capability_denied_blocks_unauthorised_ops() {
     // Create must be denied.
     let r = m1.invoke(
         &n2,
-        VmOp::Create { label: "x".into(), restart_policy: RestartPolicy::Never },
+        VmOp::Create { label: "x".into(), restart_policy: RestartPolicy::Never, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None },
         Duration::from_millis(2_000),
     ).await;
     assert!(

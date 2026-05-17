@@ -84,6 +84,10 @@ async fn create_then_start_vm_across_nodes() {
         VmOp::Create {
             label: "guest-zero".into(),
             restart_policy: RestartPolicy::Never,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         },
         Duration::from_millis(2_000),
     ).await.expect("invoke create");
@@ -143,6 +147,10 @@ async fn supervisor_restarts_orphan_vm_with_always_policy() {
         VmOp::Create {
             label: "critical".into(),
             restart_policy: RestartPolicy::Always,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         },
         Duration::from_millis(2_000),
     ).await.expect("invoke create");

@@ -30,8 +30,8 @@ use crate::manager;
 use crate::serial_io;
 use crate::vm::{VmId, VmState};
 use crate::wire::{
-    decode_request, encode_reply, LabelBuf, Reply, Request, Row, StateTag,
-    LABEL_MAX, ROWS_MAX,
+    decode_request, encode_reply, ImagePathBuf, LabelBuf, Reply, Request, Row, StateTag,
+    IMAGE_PATH_MAX, LABEL_MAX, ROWS_MAX,
 };
 
 /// Maximum bytes one request line may consume.
@@ -52,8 +52,10 @@ const _: () = assert!(crate::wire::ROWS_MAX == crate::manager::MAX_VMS);
 static mut RX_BUF: [u8; MAX_FRAME_BYTES] = [0; MAX_FRAME_BYTES];
 
 /// Static TX buffer. Sized to fit the worst-case `Listed` reply:
-/// `MAX_VMS` rows × ~80 bytes each + framing.
-const TX_CAP: usize = 1024;
+/// `MAX_VMS` rows × ~280 bytes each (label + image_path + numeric
+/// extras) + framing. Bumped from 1 KiB in W23-B when rows started
+/// carrying the W22-v2 image / config fields.
+const TX_CAP: usize = 2048;
 static mut TX_BUF: [u8; TX_CAP] = [0; TX_CAP];
 
 /// Enter the bridge loop. Never returns under normal operation.
@@ -114,17 +116,27 @@ pub fn run() -> ! {
 
 fn dispatch(req: Request<'_>) -> HyperResult<Reply> {
     match req {
-        Request::Create { label } => {
+        Request::Create { label, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
             if label.len() > LABEL_MAX {
                 return Err(HyperError::Invalid("bridge: label > 32 chars"));
             }
-            // Labels are stored in a side table indexed by slot id so
-            // List replies can echo them back. The kernel `manager`
-            // itself never sees the label — keeping its struct
-            // surface minimal is a deliberate W22 goal.
+            if let Some(p) = image_path {
+                if p.len() > IMAGE_PATH_MAX {
+                    return Err(HyperError::Invalid("bridge: image_path > 128 chars"));
+                }
+            }
+            // Labels + image metadata are stored in a side table
+            // indexed by slot id so List replies can echo them back.
+            // The kernel `manager` itself never sees these fields —
+            // keeping its struct surface minimal is a deliberate W22
+            // goal. The image is *not* loaded into the guest today;
+            // the kernel still runs the canned HELLO bring-up
+            // template. The metadata path closes the host→kernel
+            // drift-detection loop ahead of the loader landing.
             let req = manager::CreateVmRequest::hello();
             let id = manager::create_vm(&req)?;
             remember_label(id, label)?;
+            remember_extras(id, image_path, cpu_count, memory_mib, boot_blob_crc32c)?;
             Ok(Reply::Created { vm_id: id.0 })
         }
         Request::Start { vm_id } => {
@@ -145,6 +157,7 @@ fn dispatch(req: Request<'_>) -> HyperResult<Reply> {
             let id = VmId(vm_id);
             manager::delete_vm(id)?;
             forget_label(id);
+            forget_extras(id);
             Ok(Reply::Deleted { vm_id })
         }
         Request::List => Ok(Reply::Listed { rows: build_rows() }),
@@ -186,9 +199,70 @@ fn forget_label(id: VmId) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Image / config side-table (W23-B)
+//
+// Mirrors `LABELS` but carries the optional VM configuration the
+// controller knows about: the host-side image path, vCPU count,
+// guest memory in MiB, and the staged boot-blob CRC32C. These ride
+// in `Reply::Listed` rows so a controller running `celctl cluster
+// vms` against a live kernel sees the same metadata it gossips
+// between host nodes.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Extras {
+    image_path: ImagePathBuf,
+    cpu_count: Option<u32>,
+    memory_mib: Option<u64>,
+    boot_blob_crc32c: Option<u32>,
+}
+
+impl Extras {
+    const fn empty() -> Self {
+        Self {
+            image_path: ImagePathBuf::empty(),
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
+        }
+    }
+}
+
+static EXTRAS: spin::Mutex<[Extras; ROWS_MAX]> =
+    spin::Mutex::new([const { Extras::empty() }; ROWS_MAX]);
+
+fn remember_extras(
+    id: VmId,
+    image_path: Option<&[u8]>,
+    cpu_count: Option<u32>,
+    memory_mib: Option<u64>,
+    boot_blob_crc32c: Option<u32>,
+) -> HyperResult<()> {
+    let i = id.0 as usize;
+    if i >= ROWS_MAX {
+        return Err(HyperError::Denied("bridge: VmId out of range"));
+    }
+    let image_path = match image_path {
+        None => ImagePathBuf::empty(),
+        Some(p) => ImagePathBuf::from_slice(p)
+            .ok_or(HyperError::Invalid("bridge: image_path > 128 chars"))?,
+    };
+    EXTRAS.lock()[i] = Extras { image_path, cpu_count, memory_mib, boot_blob_crc32c };
+    Ok(())
+}
+
+fn forget_extras(id: VmId) {
+    let i = id.0 as usize;
+    if i < ROWS_MAX {
+        EXTRAS.lock()[i] = Extras::empty();
+    }
+}
+
 fn build_rows() -> [Option<Row>; ROWS_MAX] {
     let (entries, _) = manager::list_vms();
     let labels = *LABELS.lock();
+    let extras = *EXTRAS.lock();
     let mut out: [Option<Row>; ROWS_MAX] = [None; ROWS_MAX];
     for (i, entry) in entries.iter().enumerate() {
         if let Some(e) = entry {
@@ -197,6 +271,10 @@ fn build_rows() -> [Option<Row>; ROWS_MAX] {
                 label: labels[i],
                 state: state_tag(e.state),
                 last_exit: e.last_exit,
+                image_path: extras[i].image_path,
+                cpu_count: extras[i].cpu_count,
+                memory_mib: extras[i].memory_mib,
+                boot_blob_crc32c: extras[i].boot_blob_crc32c,
             });
         }
     }

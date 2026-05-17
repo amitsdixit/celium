@@ -109,6 +109,10 @@ async fn live_guest_with_persistent_volume_survives_owner_failure() {
         VmOp::Create {
             label: "live-guest".into(),
             restart_policy: RestartPolicy::Always,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         },
         Duration::from_millis(3_000),
     ).await.expect("create vm on n2") {
@@ -225,6 +229,10 @@ async fn supervisor_preserves_volume_attachments_across_restart() {
         VmOp::Create {
             label: "with-vol".into(),
             restart_policy: RestartPolicy::Always,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         },
         Duration::from_millis(3_000),
     ).await.unwrap() {

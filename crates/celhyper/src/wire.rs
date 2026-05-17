@@ -8,10 +8,17 @@
 //! recursive-descent scanner over `&[u8]`; the encoder writes into
 //! a caller-supplied `&mut [u8]`. No heap allocation anywhere.
 //!
-//! # Wire shape (W22 v1)
+//! # Wire shape (W22 v1, extended W23-B)
 //!
 //! Requests:
 //! * `{"op":"create","label":"..."}`         — label ≤ [`LABEL_MAX`]
+//!   Create accepts these forward-compatible *optional* fields, all
+//!   `#[serde(default)]` on the host side and `skip_value`-tolerated
+//!   by legacy decoders:
+//!   * `"image_path":"..."`         — host path ≤ [`IMAGE_PATH_MAX`]
+//!   * `"cpu_count":N`              — 1…=64
+//!   * `"memory_mib":N`             — 1…=1048576
+//!   * `"boot_blob_crc32c":N`       — host-staged blob CRC
 //! * `{"op":"start","vm_id":N}`
 //! * `{"op":"stop","vm_id":N}`
 //! * `{"op":"delete","vm_id":N}`
@@ -43,6 +50,13 @@ use crate::error::{HyperError, HyperResult};
 /// `LoopbackHyperLink::apply` (`label.len() > 32`).
 pub const LABEL_MAX: usize = 32;
 
+/// Maximum host image path length the wire accepts. Sized so a
+/// reasonably nested Windows or POSIX path fits without forcing the
+/// host to truncate or shorten symlinks. Per-row storage cost in the
+/// bridge side-table is `ROWS_MAX * IMAGE_PATH_MAX` bytes — small
+/// enough that the buffers live in `.bss` rather than the heap.
+pub const IMAGE_PATH_MAX: usize = 128;
+
 /// Maximum number of VM rows in one [`Reply::Listed`].
 ///
 /// Hard-coded rather than re-exported from [`crate::manager::MAX_VMS`]
@@ -55,10 +69,25 @@ pub const ROWS_MAX: usize = 4;
 /// One bridge call decoded off the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Request<'a> {
-    /// Allocate a slot with `label`.
+    /// Allocate a slot with `label` and optional configuration.
     Create {
         /// Label bytes. Guaranteed ≤ [`LABEL_MAX`] by the decoder.
         label: &'a [u8],
+        /// Host-side image path the controller staged for this VM,
+        /// if any. Guaranteed ≤ [`IMAGE_PATH_MAX`] by the decoder.
+        /// The kernel does not *load* the image yet — it records the
+        /// path so `List` rows can carry it back to the controller
+        /// for gossip / drift detection.
+        image_path: Option<&'a [u8]>,
+        /// Requested vCPU count, if known. Recorded only; the
+        /// kernel still runs the canned bring-up template.
+        cpu_count: Option<u32>,
+        /// Requested guest memory in MiB, if known. Recorded only.
+        memory_mib: Option<u64>,
+        /// CRC32C of the host-staged boot blob, if known. Recorded
+        /// only; used by the controller to detect image drift across
+        /// restarts.
+        boot_blob_crc32c: Option<u32>,
     },
     /// `vmlaunch` slot `vm_id`.
     Start {
@@ -155,6 +184,15 @@ pub struct Row {
     pub state: StateTag,
     /// Last guest exit code if known.
     pub last_exit: Option<u32>,
+    /// Host-side image path recorded at create time, if any.
+    pub image_path: ImagePathBuf,
+    /// vCPU count recorded at create time, if any.
+    pub cpu_count: Option<u32>,
+    /// Guest memory in MiB recorded at create time, if any.
+    pub memory_mib: Option<u64>,
+    /// CRC32C of the host-staged boot blob recorded at create time,
+    /// if any.
+    pub boot_blob_crc32c: Option<u32>,
 }
 
 /// Fixed-size label buffer carried by [`Row`]. Avoids both `alloc`
@@ -193,6 +231,48 @@ impl LabelBuf {
     }
 }
 
+/// Fixed-size image-path buffer carried by [`Row`]. Mirrors
+/// [`LabelBuf`] but sized for paths rather than labels. An empty
+/// buffer (`len == 0`) is the on-the-wire "no image" sentinel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImagePathBuf {
+    /// Bytes; only the first `len` are valid.
+    pub bytes: [u8; IMAGE_PATH_MAX],
+    /// Valid prefix length. Stored as `u16` because
+    /// `IMAGE_PATH_MAX > 255`.
+    pub len: u16,
+}
+
+impl ImagePathBuf {
+    /// Empty path — the "no image staged" value.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { bytes: [0; IMAGE_PATH_MAX], len: 0 }
+    }
+
+    /// Copy `src` into a fresh buffer. Returns `None` if too long.
+    #[must_use]
+    pub fn from_slice(src: &[u8]) -> Option<Self> {
+        if src.len() > IMAGE_PATH_MAX {
+            return None;
+        }
+        let mut out = Self::empty();
+        out.bytes[..src.len()].copy_from_slice(src);
+        out.len = src.len() as u16;
+        Some(out)
+    }
+
+    /// Valid portion of the buffer.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
+    /// `true` if the buffer carries no path (the wire sentinel).
+    #[must_use]
+    pub const fn is_empty(&self) -> bool { self.len == 0 }
+}
+
 // ---------------------------------------------------------------------------
 // Decoder
 // ---------------------------------------------------------------------------
@@ -209,6 +289,10 @@ pub fn decode_request(frame: &[u8]) -> HyperResult<Request<'_>> {
     let mut op: Option<&[u8]> = None;
     let mut label: Option<&[u8]> = None;
     let mut vm_id: Option<u32> = None;
+    let mut image_path: Option<&[u8]> = None;
+    let mut cpu_count: Option<u32> = None;
+    let mut memory_mib: Option<u64> = None;
+    let mut boot_blob_crc32c: Option<u32> = None;
     loop {
         s.skip_ws();
         if s.peek() == Some(b'}') {
@@ -230,6 +314,40 @@ pub fn decode_request(frame: &[u8]) -> HyperResult<Request<'_>> {
             b"vm_id" => {
                 s.skip_ws();
                 vm_id = Some(s.u32_value()?);
+            }
+            b"image_path" => {
+                s.skip_ws();
+                // Allow JSON `null` as the "no image" value so the
+                // host doesn't have to omit the field conditionally.
+                if s.try_consume_null() {
+                    image_path = None;
+                } else {
+                    image_path = Some(s.string()?);
+                }
+            }
+            b"cpu_count" => {
+                s.skip_ws();
+                if s.try_consume_null() {
+                    cpu_count = None;
+                } else {
+                    cpu_count = Some(s.u32_value()?);
+                }
+            }
+            b"memory_mib" => {
+                s.skip_ws();
+                if s.try_consume_null() {
+                    memory_mib = None;
+                } else {
+                    memory_mib = Some(s.u64_value()?);
+                }
+            }
+            b"boot_blob_crc32c" => {
+                s.skip_ws();
+                if s.try_consume_null() {
+                    boot_blob_crc32c = None;
+                } else {
+                    boot_blob_crc32c = Some(s.u32_value()?);
+                }
             }
             _ => s.skip_value()?, // forward-compat
         }
@@ -253,7 +371,18 @@ pub fn decode_request(frame: &[u8]) -> HyperResult<Request<'_>> {
             if lbl.len() > LABEL_MAX {
                 return Err(HyperError::Invalid("wire: label > 32 chars"));
             }
-            Ok(Request::Create { label: lbl })
+            if let Some(p) = image_path {
+                if p.len() > IMAGE_PATH_MAX {
+                    return Err(HyperError::Invalid("wire: image_path > 128 chars"));
+                }
+            }
+            Ok(Request::Create {
+                label: lbl,
+                image_path,
+                cpu_count,
+                memory_mib,
+                boot_blob_crc32c,
+            })
         }
         b"start" => Ok(Request::Start {
             vm_id: vm_id.ok_or(HyperError::Invalid("wire: start missing vm_id"))?,
@@ -319,6 +448,23 @@ pub fn encode_reply(reply: &Reply, out: &mut [u8]) -> HyperResult<usize> {
                 if let Some(exit) = row.last_exit {
                     w.put_str(br#","last_exit":"#)?;
                     w.put_u32(exit)?;
+                }
+                if !row.image_path.is_empty() {
+                    w.put_str(br#","image_path":""#)?;
+                    w.put_str(row.image_path.as_slice())?;
+                    w.put_u8(b'"')?;
+                }
+                if let Some(c) = row.cpu_count {
+                    w.put_str(br#","cpu_count":"#)?;
+                    w.put_u32(c)?;
+                }
+                if let Some(m) = row.memory_mib {
+                    w.put_str(br#","memory_mib":"#)?;
+                    w.put_u64(m)?;
+                }
+                if let Some(crc) = row.boot_blob_crc32c {
+                    w.put_str(br#","boot_blob_crc32c":"#)?;
+                    w.put_u32(crc)?;
                 }
                 w.put_u8(b'}')?;
             }
@@ -397,6 +543,37 @@ impl<'a> Scanner<'a> {
                 .ok_or(HyperError::Invalid("wire: u32 overflow"))?;
         }
         Ok(acc)
+    }
+
+    fn u64_value(&mut self) -> HyperResult<u64> {
+        let start = self.pos;
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        if start == self.pos {
+            return Err(HyperError::Invalid("wire: expected number"));
+        }
+        let mut acc: u64 = 0;
+        for &b in &self.buf[start..self.pos] {
+            acc = acc
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(u64::from(b - b'0')))
+                .ok_or(HyperError::Invalid("wire: u64 overflow"))?;
+        }
+        Ok(acc)
+    }
+
+    /// Consume a literal `null` if it appears at the current
+    /// position. Used so optional fields can be explicitly nulled
+    /// over the wire (`"cpu_count":null`) without forcing the
+    /// encoder to omit them entirely.
+    fn try_consume_null(&mut self) -> bool {
+        if self.buf.get(self.pos..self.pos + 4) == Some(b"null") {
+            self.pos += 4;
+            true
+        } else {
+            false
+        }
     }
 
     /// Skip a JSON value of any type. Only used by the forward-compat
@@ -482,6 +659,23 @@ impl<'a> Writer<'a> {
         }
         self.put_str(&buf[i..])
     }
+
+    fn put_u64(&mut self, v: u64) -> HyperResult<()> {
+        let mut buf = [0u8; 20];
+        let mut i = buf.len();
+        let mut n = v;
+        if n == 0 {
+            i -= 1;
+            buf[i] = b'0';
+        } else {
+            while n > 0 {
+                i -= 1;
+                buf[i] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+        }
+        self.put_str(&buf[i..])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -496,9 +690,52 @@ mod tests {
     fn decode_create_round_trip() {
         let r = decode_request(br#"{"op":"create","label":"hello"}"#).unwrap();
         match r {
-            Request::Create { label } => assert_eq!(label, b"hello"),
+            Request::Create { label, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
+                assert_eq!(label, b"hello");
+                assert!(image_path.is_none());
+                assert!(cpu_count.is_none());
+                assert!(memory_mib.is_none());
+                assert!(boot_blob_crc32c.is_none());
+            }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn decode_create_with_full_config_payload() {
+        let frame = br#"{"op":"create","label":"vm","image_path":"/img/disk.raw","cpu_count":2,"memory_mib":512,"boot_blob_crc32c":3735928559}"#;
+        let r = decode_request(frame).unwrap();
+        match r {
+            Request::Create { label, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
+                assert_eq!(label, b"vm");
+                assert_eq!(image_path.unwrap(), b"/img/disk.raw");
+                assert_eq!(cpu_count, Some(2));
+                assert_eq!(memory_mib, Some(512));
+                assert_eq!(boot_blob_crc32c, Some(3_735_928_559));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn decode_create_accepts_explicit_null_for_optionals() {
+        let frame = br#"{"op":"create","label":"vm","image_path":null,"cpu_count":null,"memory_mib":null,"boot_blob_crc32c":null}"#;
+        let r = decode_request(frame).unwrap();
+        match r {
+            Request::Create { label, image_path, cpu_count, memory_mib, boot_blob_crc32c } => {
+                assert_eq!(label, b"vm");
+                assert!(image_path.is_none() && cpu_count.is_none() && memory_mib.is_none() && boot_blob_crc32c.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn decode_create_rejects_oversized_image_path() {
+        let big = "x".repeat(IMAGE_PATH_MAX + 1);
+        let frame = format!(r#"{{"op":"create","label":"vm","image_path":"{big}"}}"#);
+        let err = decode_request(frame.as_bytes()).unwrap_err();
+        assert!(matches!(err, HyperError::Invalid(_)));
     }
 
     #[test]
@@ -506,7 +743,7 @@ mod tests {
         // W22-v2 might add fields; v1 kernels must tolerate them.
         let frame = br#"{"op":"create","label":"x","future":{"a":1}}"#;
         let r = decode_request(frame).unwrap();
-        assert!(matches!(r, Request::Create { label } if label == b"x"));
+        assert!(matches!(r, Request::Create { label, .. } if label == b"x"));
     }
 
     #[test]
@@ -594,12 +831,20 @@ mod tests {
             label: LabelBuf::from_slice(b"first").unwrap(),
             state: StateTag::Created,
             last_exit: None,
+            image_path: ImagePathBuf::empty(),
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         });
         rows[1] = Some(Row {
             vm_id: 1,
             label: LabelBuf::from_slice(b"").unwrap(),
             state: StateTag::Halted,
             last_exit: Some(12),
+            image_path: ImagePathBuf::empty(),
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         });
         let mut buf = [0u8; 256];
         let n = encode_reply(&Reply::Listed { rows }, &mut buf).unwrap();
@@ -608,6 +853,28 @@ mod tests {
         assert!(line.contains(r#"{"vm_id":0,"label":"first","state":"created"}"#));
         assert!(line.contains(r#"{"vm_id":1,"label":"","state":"halted","last_exit":12}"#));
         assert!(line.ends_with("]}\n"));
+    }
+
+    #[test]
+    fn encode_listed_includes_image_metadata_when_present() {
+        let mut rows: [Option<Row>; ROWS_MAX] = [None; ROWS_MAX];
+        rows[0] = Some(Row {
+            vm_id: 0,
+            label: LabelBuf::from_slice(b"vm").unwrap(),
+            state: StateTag::Created,
+            last_exit: None,
+            image_path: ImagePathBuf::from_slice(b"/img/disk.raw").unwrap(),
+            cpu_count: Some(2),
+            memory_mib: Some(512),
+            boot_blob_crc32c: Some(0xDEAD_BEEF),
+        });
+        let mut buf = [0u8; 512];
+        let n = encode_reply(&Reply::Listed { rows }, &mut buf).unwrap();
+        let line = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(line.contains(r#""image_path":"/img/disk.raw""#), "line={line}");
+        assert!(line.contains(r#""cpu_count":2"#), "line={line}");
+        assert!(line.contains(r#""memory_mib":512"#), "line={line}");
+        assert!(line.contains(r#""boot_blob_crc32c":3735928559"#), "line={line}");
     }
 
     #[test]

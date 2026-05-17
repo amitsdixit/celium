@@ -74,6 +74,10 @@ async fn networking_round_trip() {
     let vm0 = match m1.invoke(&n2, VmOp::Create {
         label: "a".into(),
         restart_policy: celmesh::RestartPolicy::Never,
+        image_path: None,
+        cpu_count: None,
+        memory_mib: None,
+        boot_blob_crc32c: None,
     }, Duration::from_millis(2_000)).await.unwrap() {
         VmOpReply::Created { vm_id } => vm_id,
         r => panic!("unexpected: {r:?}"),
@@ -81,6 +85,10 @@ async fn networking_round_trip() {
     let vm1 = match m1.invoke(&n2, VmOp::Create {
         label: "b".into(),
         restart_policy: celmesh::RestartPolicy::Never,
+        image_path: None,
+        cpu_count: None,
+        memory_mib: None,
+        boot_blob_crc32c: None,
     }, Duration::from_millis(2_000)).await.unwrap() {
         VmOpReply::Created { vm_id } => vm_id,
         r => panic!("unexpected: {r:?}"),

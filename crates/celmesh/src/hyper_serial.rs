@@ -259,7 +259,7 @@ mod tests {
         let host = CelhyperVmHost::new(link);
 
         let r = host
-            .handle(VmOp::Create { label: "g".into(), restart_policy: RestartPolicy::Never })
+            .handle(VmOp::Create { label: "g".into(), restart_policy: RestartPolicy::Never, image_path: None, cpu_count: None, memory_mib: None, boot_blob_crc32c: None })
             .await
             .unwrap();
         let VmOpReply::Created { vm_id } = r else { panic!("create") };
@@ -284,7 +284,13 @@ mod tests {
         let (r, mut w) = tokio::io::split(client);
         let mut reader = BufReader::new(r);
 
-        let req = HyperRequest::Create { label: "dup".into() };
+        let req = HyperRequest::Create {
+            label: "dup".into(),
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
+        };
         let mut line = serde_json::to_string(&req).unwrap();
         line.push('\n');
         w.write_all(line.as_bytes()).await.unwrap();

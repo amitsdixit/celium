@@ -53,6 +53,10 @@ async fn end_to_end_bridge_drives_lifecycle_through_real_tcp() {
             .handle(VmOp::Create {
                 label: format!("g{i}"),
                 restart_policy: RestartPolicy::Never,
+                image_path: None,
+                cpu_count: None,
+                memory_mib: None,
+                boot_blob_crc32c: None,
             })
             .await);
         match r {
@@ -113,6 +117,10 @@ async fn stop_then_delete_round_trips_through_bridge() {
         .handle(VmOp::Create {
             label: "to-stop".into(),
             restart_policy: RestartPolicy::Never,
+            image_path: None,
+            cpu_count: None,
+            memory_mib: None,
+            boot_blob_crc32c: None,
         })
         .await);
     let vm_id = match r {
