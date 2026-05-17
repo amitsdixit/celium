@@ -36,11 +36,13 @@ use crate::wire::{
 
 /// Maximum bytes one request line may consume.
 ///
-/// The kernel sizes its RX buffer to comfortably fit the largest
-/// possible W22-v1 request (`create` with the maximum label) plus
-/// slop for whitespace and forward-compat fields. Anything bigger
-/// is logged + dropped, not parsed.
-pub const MAX_FRAME_BYTES: usize = 256;
+/// Bumped W23-E1 from 256 → 12288 to fit a one-shot `image_load`
+/// frame: at most `MAX_IMAGE_BYTES` (4 KiB today) hex-encoded
+/// (×2 = 8 KiB) plus JSON overhead (`{"op":"image_load","len":4096,"crc32c":4294967295,"bytes_hex":"..."}`
+/// is ~80 bytes). Round up to 12 KiB to leave headroom for the
+/// W23-E2 follow-on (`ImageBegin`/`Chunk`/`Commit` framing) without
+/// another rebuild.
+pub const MAX_FRAME_BYTES: usize = 12 * 1024;
 
 /// Compile-time assertion that the wire's row capacity matches the
 /// kernel's VM table size. If you bump `manager::MAX_VMS`, also bump
@@ -146,13 +148,16 @@ fn dispatch(req: Request<'_>) -> HyperResult<Reply> {
             // indexed by slot id so List replies can echo them back.
             // The kernel `manager` itself never sees these fields —
             // keeping its struct surface minimal is a deliberate W22
-            // goal. The image bytes themselves are not yet shipped
-            // over the bridge (that's W23-E); for now every Create
-            // installs the same boot image — handoff-staged if
-            // CelLoader provided one, else the embedded HELLO_BLOB
-            // — so the host's `image_path` / `boot_blob_crc32c` are
-            // recorded but not enforced.
-            let image = crate::image_loader::BootImage::embedded();
+            // goal.
+            //
+            // W23-E1: the bridge now prefers a host-staged boot
+            // image whose CRC matches `boot_blob_crc32c`. If no
+            // staged image matches (or the controller supplied no
+            // CRC) we fall back to the embedded HELLO blob — every
+            // pre-E1 controller keeps working unchanged.
+            let image = crate::image_loader::BootImage::from_staged_or_embedded(
+                boot_blob_crc32c,
+            );
             let req = manager::CreateVmRequest::from_boot_image(&image);
             let id = manager::create_vm(&req)?;
             remember_label(id, label)?;
@@ -181,6 +186,13 @@ fn dispatch(req: Request<'_>) -> HyperResult<Reply> {
             Ok(Reply::Deleted { vm_id })
         }
         Request::List => Ok(Reply::Listed { rows: build_rows() }),
+        Request::ImageLoad { len, crc32c, bytes_hex } => {
+            // The wire decoder already enforced
+            // `bytes_hex.len() == 2*len`; `stage_from_hex`
+            // re-checks it as belt-and-braces against direct callers.
+            crate::image_loader::stage_from_hex(bytes_hex, len, crc32c)?;
+            Ok(Reply::ImageLoaded { len, crc32c })
+        }
     }
 }
 

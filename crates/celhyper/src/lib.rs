@@ -28,6 +28,7 @@
 
 pub mod arch;
 pub mod cap;
+pub mod crc;
 pub mod error;
 pub mod guest;
 pub mod handoff;

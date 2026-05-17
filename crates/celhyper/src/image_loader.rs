@@ -226,3 +226,197 @@ impl<'a> BootImage<'a> {
 /// One-byte `hlt` instruction used as the absolute-last-resort
 /// fallback. Kept as a top-level constant so its address is stable.
 static HLT_FALLBACK: [u8; 1] = [0xF4];
+
+// ---------------------------------------------------------------------------
+// W23-E1 — single-slot host→kernel boot-image staging.
+// ---------------------------------------------------------------------------
+//
+// The bridge streams a guest image into this static slot via
+// `Request::ImageLoad`. The kernel validates length + CRC32C, then
+// records the buffer as "present". A subsequent `Request::Create`
+// whose `boot_blob_crc32c` matches the staged image's CRC installs
+// the staged blob instead of the embedded `HELLO_BLOB`.
+//
+// One slot rather than N because:
+//   1. ROWS_MAX == 4 — quadrupling the static cost (16 KiB) buys
+//      very little while the kernel still can't service concurrent
+//      Creates (the bridge dispatch is serial).
+//   2. The transfer→Create handshake completes synchronously inside
+//      one bridge turn, so the staged slot can never be referenced
+//      after the next ImageLoad overwrites it.
+//
+// The slot lives behind a `spin::Mutex` purely as a guard against
+// future SMP reuse; today it's only ever touched by the BSP from
+// `bridge::dispatch`.
+
+/// Static staging slot for one host-shipped boot image.
+struct StagedImage {
+    bytes: [u8; MAX_IMAGE_BYTES],
+    /// Valid prefix length. 0 means "empty"; otherwise the first
+    /// `len` bytes of `bytes` are the staged payload.
+    len: usize,
+    /// CRC32C of the first `len` bytes, recomputed by `stage_from_hex`.
+    crc32c: u32,
+    /// `true` once `stage_from_hex` has populated and validated the
+    /// slot. Cleared by `discard_staged`.
+    present: bool,
+}
+
+impl StagedImage {
+    const fn empty() -> Self {
+        Self {
+            bytes: [0; MAX_IMAGE_BYTES],
+            len: 0,
+            crc32c: 0,
+            present: false,
+        }
+    }
+}
+
+static STAGED: spin::Mutex<StagedImage> = spin::Mutex::new(StagedImage::empty());
+
+/// Stage a host-shipped boot image by decoding `hex` directly into
+/// the static staging slot, then validating its CRC32C against
+/// `expected_crc`.
+///
+/// `expected_len` is the *decoded* byte length; it must match
+/// `hex.len() / 2`. The wire decoder enforces this, but we re-check
+/// here so direct callers (tests, future bring-up paths) can't bypass
+/// the invariant.
+///
+/// On any validation failure the staging slot is left empty (any
+/// previously staged image is cleared) and a descriptive
+/// [`HyperError`] is returned.
+pub fn stage_from_hex(hex: &[u8], expected_len: u32, expected_crc: u32) -> HyperResult<()> {
+    let expected_len_usize = expected_len as usize;
+    if expected_len_usize == 0 {
+        return Err(HyperError::Invalid("image_loader: stage len == 0"));
+    }
+    if expected_len_usize > MAX_IMAGE_BYTES {
+        return Err(HyperError::Invalid(
+            "image_loader: stage len > MAX_IMAGE_BYTES",
+        ));
+    }
+    if hex.len() != expected_len_usize.saturating_mul(2) {
+        return Err(HyperError::Invalid("image_loader: stage hex len mismatch"));
+    }
+    let mut slot = STAGED.lock();
+    // Clear first so a half-decoded failure can't leave stale bytes
+    // visible to a future `take_staged` after the present flag flips.
+    slot.present = false;
+    slot.len = 0;
+    slot.crc32c = 0;
+    let n = crate::wire::hex_decode(hex, &mut slot.bytes[..expected_len_usize])?;
+    debug_assert_eq!(n, expected_len_usize);
+    let actual_crc = crc32c(&slot.bytes[..expected_len_usize]);
+    if actual_crc != expected_crc {
+        crate::logger::log("celhyper: image_loader: staged blob CRC mismatch; rejecting");
+        // Wipe to avoid silently retaining unverified bytes.
+        for b in &mut slot.bytes[..expected_len_usize] {
+            *b = 0;
+        }
+        return Err(HyperError::Invalid("image_loader: stage CRC mismatch"));
+    }
+    slot.len = expected_len_usize;
+    slot.crc32c = actual_crc;
+    slot.present = true;
+    Ok(())
+}
+
+/// Returns `Some((len, crc))` for the currently staged image, or
+/// `None` if nothing is staged. Diagnostic-only — does not lend out
+/// the underlying bytes.
+#[must_use]
+pub fn staged_meta() -> Option<(u32, u32)> {
+    let slot = STAGED.lock();
+    if slot.present {
+        Some((slot.len as u32, slot.crc32c))
+    } else {
+        None
+    }
+}
+
+/// Discard any staged image. Idempotent.
+pub fn discard_staged() {
+    let mut slot = STAGED.lock();
+    slot.present = false;
+    slot.len = 0;
+    slot.crc32c = 0;
+}
+
+impl BootImage<'static> {
+    /// Pick the most-specific image available *for the bridge's
+    /// `Request::Create` path*: a host-staged image whose CRC matches
+    /// the controller-provided `expected_crc`, otherwise the embedded
+    /// HELLO blob. Handoff-staged images are bring-up only (W23-E2
+    /// will fold the two paths together once the bridge takes over
+    /// from CelLoader for image transport).
+    ///
+    /// `expected_crc == None` means the controller didn't supply a
+    /// CRC; we conservatively refuse to use the staged blob in that
+    /// case — the controller asked for the canned guest and we honour
+    /// that.
+    ///
+    /// Returns a `BootImage<'static>` because both candidate
+    /// payloads live in `.bss` for the kernel's lifetime. Lives in
+    /// its own `impl BootImage<'static>` block (rather than the
+    /// generic `impl<'a> BootImage<'a>`) so the embedded-fallback
+    /// path can return `Self` without forcing `'a = 'static`
+    /// pollution onto every other constructor.
+    #[must_use]
+    pub fn from_staged_or_embedded(expected_crc: Option<u32>) -> Self {
+        if let Some(want) = expected_crc {
+            let slot = STAGED.lock();
+            if slot.present && slot.crc32c == want {
+                let len = slot.len;
+                // SAFETY: `STAGED.bytes` is a `static` allocation
+                // that lives for the kernel's lifetime. We hold the
+                // mutex only long enough to read the length and CRC;
+                // the bytes themselves are immutable for the
+                // remainder of the bridge turn because:
+                //   * `stage_from_hex` (the only writer) is called
+                //     serially from the same bridge dispatcher, and
+                //   * `install_first_guest` copies the bytes into
+                //     guest RAM before the dispatcher returns and
+                //     reads the next request.
+                // We rebind to `'static` to escape the mutex guard's
+                // lifetime; the bytes are not aliased mutably during
+                // this BootImage's use because the bridge is single-
+                // threaded and synchronous.
+                let bytes_ptr = slot.bytes.as_ptr();
+                drop(slot);
+                let bytes: &'static [u8] = unsafe {
+                    core::slice::from_raw_parts(bytes_ptr, len)
+                };
+                crate::logger::log("celhyper: boot image: staged (crc match)");
+                // from_raw_bytes can't fail here: len was validated
+                // by stage_from_hex against MAX_IMAGE_BYTES and the
+                // GUEST_LOAD_GPA entry point is in-range by
+                // construction.
+                return match Self::from_raw_bytes(bytes, GUEST_LOAD_GPA, 0, Some(want)) {
+                    Ok(img) => img,
+                    Err(_) => {
+                        crate::logger::log(
+                            "celhyper: staged image rejected by from_raw_bytes; falling back",
+                        );
+                        Self::embedded()
+                    }
+                };
+            }
+            crate::logger::log(
+                "celhyper: boot image: embedded (no staged image matches requested CRC)",
+            );
+        } else {
+            crate::logger::log(
+                "celhyper: boot image: embedded (controller supplied no boot_blob_crc32c)",
+            );
+        }
+        Self::embedded()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CRC32C — see [`crate::crc`] for the algorithm and known-vector tests.
+// ---------------------------------------------------------------------------
+
+pub use crate::crc::{crc32c, crc32c_continue};

@@ -19,6 +19,13 @@
 //!   * `"cpu_count":N`              — 1…=64
 //!   * `"memory_mib":N`             — 1…=1048576
 //!   * `"boot_blob_crc32c":N`       — host-staged blob CRC
+//! * `{"op":"image_load","len":N,"crc32c":N,"bytes_hex":"deadbeef..."}`
+//!   — W23-E1: one-shot host→kernel boot-image upload. Hex-encoded
+//!   because the closed JSON grammar above has no binary-safe
+//!   primitive. `len` MUST equal `bytes_hex.len() / 2` and MUST be
+//!   ≤ [`crate::image_loader::MAX_IMAGE_BYTES`]. `crc32c` MUST
+//!   match the Castagnoli CRC32C of the decoded bytes; the kernel
+//!   recomputes it and returns [`Reply::Error`] on mismatch.
 //! * `{"op":"start","vm_id":N}`
 //! * `{"op":"stop","vm_id":N}`
 //! * `{"op":"delete","vm_id":N}`
@@ -30,6 +37,10 @@
 //!   — `last_exit` is omitted when `None`.
 //! * `{"reply":"deleted","vm_id":N}`
 //! * `{"reply":"listed","rows":[{...},...]}`
+//! * `{"reply":"image_loaded","len":N,"crc32c":N}`
+//!   — W23-E1: emitted on successful [`Request::ImageLoad`]. Both
+//!   `len` and `crc32c` echo back what the kernel verified, so the
+//!   host can assert byte-for-byte agreement with what it sent.
 //! * `{"reply":"error","message":"..."}`
 //!   — emitted whenever the bridge's `dispatch` returns a
 //!   [`HyperError`]. Message is ASCII-only, ≤ [`ERROR_MSG_MAX`], and
@@ -116,6 +127,24 @@ pub enum Request<'a> {
     },
     /// Snapshot every slot.
     List,
+    /// W23-E1: stage a guest boot image so the next [`Request::Create`]
+    /// can install it instead of the embedded HELLO blob.
+    ///
+    /// The kernel keeps exactly one staged image at a time; a second
+    /// `ImageLoad` overwrites the first. The kernel validates that
+    /// the decoded byte stream is exactly `len` bytes and that its
+    /// Castagnoli CRC32C matches `crc32c`. On mismatch the staging
+    /// slot is left empty and a [`Reply::Error`] is returned.
+    ImageLoad {
+        /// Decoded payload length in bytes. MUST equal
+        /// `bytes_hex.len() / 2`. MUST be > 0 and ≤
+        /// [`crate::image_loader::MAX_IMAGE_BYTES`].
+        len: u32,
+        /// Expected Castagnoli CRC32C of the decoded bytes.
+        crc32c: u32,
+        /// Lower-case hex encoding of the payload bytes.
+        bytes_hex: &'a [u8],
+    },
 }
 
 /// One bridge reply ready to encode.
@@ -147,6 +176,16 @@ pub enum Reply {
     Listed {
         /// Live rows (only `len` are valid).
         rows: [Option<Row>; ROWS_MAX],
+    },
+    /// W23-E1: returned for a successful [`Request::ImageLoad`].
+    /// Echoes the verified `len` and `crc32c` so the host can assert
+    /// the kernel saw exactly what was sent.
+    ImageLoaded {
+        /// Length, in bytes, of the staged payload.
+        len: u32,
+        /// Castagnoli CRC32C of the staged payload, as recomputed
+        /// by the kernel.
+        crc32c: u32,
     },
     /// Emitted when [`crate::bridge::dispatch`] returned an error.
     /// Conveys a short human-readable message to the host so it
@@ -348,6 +387,9 @@ pub fn decode_request(frame: &[u8]) -> HyperResult<Request<'_>> {
     let mut cpu_count: Option<u32> = None;
     let mut memory_mib: Option<u64> = None;
     let mut boot_blob_crc32c: Option<u32> = None;
+    let mut len: Option<u32> = None;
+    let mut crc32c: Option<u32> = None;
+    let mut bytes_hex: Option<&[u8]> = None;
     loop {
         s.skip_ws();
         if s.peek() == Some(b'}') {
@@ -404,6 +446,18 @@ pub fn decode_request(frame: &[u8]) -> HyperResult<Request<'_>> {
                     boot_blob_crc32c = Some(s.u32_value()?);
                 }
             }
+            b"len" => {
+                s.skip_ws();
+                len = Some(s.u32_value()?);
+            }
+            b"crc32c" => {
+                s.skip_ws();
+                crc32c = Some(s.u32_value()?);
+            }
+            b"bytes_hex" => {
+                s.skip_ws();
+                bytes_hex = Some(s.string()?);
+            }
             _ => s.skip_value()?, // forward-compat
         }
         s.skip_ws();
@@ -449,6 +503,22 @@ pub fn decode_request(frame: &[u8]) -> HyperResult<Request<'_>> {
             vm_id: vm_id.ok_or(HyperError::Invalid("wire: delete missing vm_id"))?,
         }),
         b"list" => Ok(Request::List),
+        b"image_load" => {
+            let len = len.ok_or(HyperError::Invalid("wire: image_load missing len"))?;
+            let crc32c = crc32c
+                .ok_or(HyperError::Invalid("wire: image_load missing crc32c"))?;
+            let bytes_hex = bytes_hex
+                .ok_or(HyperError::Invalid("wire: image_load missing bytes_hex"))?;
+            // Length self-consistency: bytes_hex.len() must equal
+            // 2*len. We verify here rather than in the dispatcher so
+            // a malformed frame fails on the wire boundary.
+            if bytes_hex.len() != (len as usize).saturating_mul(2) {
+                return Err(HyperError::Invalid(
+                    "wire: image_load bytes_hex length != 2*len",
+                ));
+            }
+            Ok(Request::ImageLoad { len, crc32c, bytes_hex })
+        }
         _ => Err(HyperError::Invalid("wire: unknown op")),
     }
 }
@@ -545,9 +615,51 @@ pub fn encode_reply(reply: &Reply, out: &mut [u8]) -> HyperResult<usize> {
             }
             w.put_str(b"\"}")?;
         }
+        Reply::ImageLoaded { len, crc32c } => {
+            w.put_str(br#"{"reply":"image_loaded","len":"#)?;
+            w.put_u32(*len)?;
+            w.put_str(br#","crc32c":"#)?;
+            w.put_u32(*crc32c)?;
+            w.put_u8(b'}')?;
+        }
     }
     w.put_u8(b'\n')?;
     Ok(w.pos)
+}
+
+/// Decode a lower-case hex string into `dst`, returning the number
+/// of bytes written. Returns [`HyperError::Invalid`] on non-hex
+/// bytes, odd input length, or output too small.
+///
+/// Lower-case-only is a deliberate restriction: the host encoder is
+/// canonical lower-case, and rejecting upper-case here means the
+/// kernel doesn't have to carry the extra table for a forgiving
+/// decoder. Mixed-case payloads are a wire-format bug.
+pub fn hex_decode(src: &[u8], dst: &mut [u8]) -> HyperResult<usize> {
+    if src.len() % 2 != 0 {
+        return Err(HyperError::Invalid("wire: hex_decode odd input length"));
+    }
+    let out_len = src.len() / 2;
+    if out_len > dst.len() {
+        return Err(HyperError::Exhausted("wire: hex_decode dst too small"));
+    }
+    let mut i = 0;
+    while i < out_len {
+        let hi = hex_nibble(src[2 * i])?;
+        let lo = hex_nibble(src[2 * i + 1])?;
+        dst[i] = (hi << 4) | lo;
+        i += 1;
+    }
+    Ok(out_len)
+}
+
+#[inline]
+fn hex_nibble(b: u8) -> HyperResult<u8> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(10 + (b - b'a')),
+        _ => Err(HyperError::Invalid("wire: hex_decode non-hex byte")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,5 +1141,99 @@ mod tests {
             let line = core::str::from_utf8(&buf[..n - 1]).unwrap(); // strip \n
             assert_eq!(line, *expected, "encoding mismatch for {reply:?}");
         }
+    }
+
+    #[test]
+    fn decode_image_load_round_trip() {
+        let frame = br#"{"op":"image_load","len":3,"crc32c":12345,"bytes_hex":"abcdef"}"#;
+        let r = decode_request(frame).unwrap();
+        match r {
+            Request::ImageLoad { len, crc32c, bytes_hex } => {
+                assert_eq!(len, 3);
+                assert_eq!(crc32c, 12345);
+                assert_eq!(bytes_hex, b"abcdef");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn decode_image_load_rejects_len_mismatch() {
+        let frame = br#"{"op":"image_load","len":4,"crc32c":1,"bytes_hex":"abcdef"}"#;
+        let err = decode_request(frame).unwrap_err();
+        assert!(matches!(err, HyperError::Invalid(_)));
+    }
+
+    #[test]
+    fn decode_image_load_requires_all_fields() {
+        // missing bytes_hex
+        let frame = br#"{"op":"image_load","len":0,"crc32c":0}"#;
+        assert!(decode_request(frame).is_err());
+        // missing len
+        let frame = br#"{"op":"image_load","crc32c":0,"bytes_hex":""}"#;
+        assert!(decode_request(frame).is_err());
+        // missing crc32c
+        let frame = br#"{"op":"image_load","len":0,"bytes_hex":""}"#;
+        assert!(decode_request(frame).is_err());
+    }
+
+    #[test]
+    fn encode_image_loaded_round_trip() {
+        let mut buf = [0u8; 128];
+        let n = encode_reply(
+            &Reply::ImageLoaded { len: 81, crc32c: 0xDEAD_BEEF },
+            &mut buf,
+        )
+        .unwrap();
+        assert_eq!(
+            &buf[..n],
+            b"{\"reply\":\"image_loaded\",\"len\":81,\"crc32c\":3735928559}\n",
+        );
+    }
+
+    #[test]
+    fn hex_decode_round_trip() {
+        let mut out = [0u8; 4];
+        let n = hex_decode(b"deadbeef", &mut out).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&out[..n], &[0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn hex_decode_empty() {
+        let mut out = [0u8; 0];
+        assert_eq!(hex_decode(b"", &mut out).unwrap(), 0);
+    }
+
+    #[test]
+    fn hex_decode_rejects_odd_length() {
+        let mut out = [0u8; 4];
+        assert!(matches!(
+            hex_decode(b"abc", &mut out).unwrap_err(),
+            HyperError::Invalid(_),
+        ));
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_hex_bytes() {
+        let mut out = [0u8; 4];
+        assert!(matches!(
+            hex_decode(b"de_d", &mut out).unwrap_err(),
+            HyperError::Invalid(_),
+        ));
+        // upper-case rejected — see hex_decode contract.
+        assert!(matches!(
+            hex_decode(b"DEAD", &mut out).unwrap_err(),
+            HyperError::Invalid(_),
+        ));
+    }
+
+    #[test]
+    fn hex_decode_rejects_too_small_dst() {
+        let mut out = [0u8; 1];
+        assert!(matches!(
+            hex_decode(b"deadbeef", &mut out).unwrap_err(),
+            HyperError::Exhausted(_),
+        ));
     }
 }

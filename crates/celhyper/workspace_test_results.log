@@ -1,0 +1,3286 @@
+   Compiling celhyper v0.1.0 (C:\Users\amdix\projects\celium\crates\celhyper)
+error[E0463]: can't find crate for `std`
+  |
+  = note: the `x86_64-unknown-none` target may not support the standard library
+  = note: `std` is required by `celhyper` because it does not declare `#![no_std]`
+
+error[E0463]: can't find crate for `test`
+
+error: `#[panic_handler]` function required, but not found
+
+For more information about this error, try `rustc --explain E0463`.
+error: could not compile `celhyper` (bin "celhyper" test) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0463]: can't find crate for `std`
+   --> src\mm.rs:263:9
+    |
+263 |     use std::boxed::Box;
+    |         ^^^ can't find crate
+    |
+    = note: the `x86_64-unknown-none` target may not support the standard library
+
+error[E0463]: can't find crate for `std`
+   --> src\mm.rs:264:9
+    |
+264 |     use std::collections::HashMap;
+    |         ^^^ can't find crate
+    |
+    = note: the `x86_64-unknown-none` target may not support the standard library
+
+error: cannot find macro `writeln` in this scope
+  --> src\logger.rs:80:13
+   |
+80 |     let _ = writeln!(s, "{line}");
+   |             ^^^^^^^
+   |
+help: consider importing this macro
+   |
+8  + use core::writeln;
+   |
+
+error: cannot find macro `writeln` in this scope
+  --> src\logger.rs:86:13
+   |
+86 |     let _ = writeln!(s, "{key}={value:#x}");
+   |             ^^^^^^^
+   |
+help: consider importing this macro
+   |
+8  + use core::writeln;
+   |
+
+error: cannot find attribute `derive` in this scope
+  --> src\cap.rs:12:7
+   |
+12 |     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   |       ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\cap.rs:10:1
+   |
+10 | / bitflags! {
+11 | |     /// Rights a capability may convey. Composable via bitwise OR.
+12 | |     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+13 | |     pub struct Rights: u32 {
+...  |
+23 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `$crate::__declare_internal_bitflags` which comes from the expansion of the macro `bitflags` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: cannot find attribute `derive` in this scope
+  --> src\cap.rs:27:3
+   |
+27 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\cap.rs:48:3
+   |
+48 | #[derive(Debug, Clone, Copy)]
+   |   ^^^^^^
+
+error: cannot find attribute `test` in this scope
+  --> src\crc.rs:47:7
+   |
+47 |     #[test]
+   |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+  --> src\crc.rs:49:9
+   |
+49 |         assert_eq!(crc32c(&[]), 0);
+   |         ^^^^^^^^^
+   |
+help: consider importing this macro
+   |
+43 +     use core::assert_eq;
+   |
+
+error: cannot find macro `assert_eq` in this scope
+  --> src\crc.rs:50:9
+   |
+50 |         assert_eq!(crc32c(&[0u8; 32]), 0x8a91_36aa);
+   |         ^^^^^^^^^
+   |
+help: consider importing this macro
+   |
+43 +     use core::assert_eq;
+   |
+
+error: cannot find macro `assert_eq` in this scope
+  --> src\crc.rs:51:9
+   |
+51 |         assert_eq!(crc32c(&[0xffu8; 32]), 0x62a8_ab43);
+   |         ^^^^^^^^^
+   |
+help: consider importing this macro
+   |
+43 +     use core::assert_eq;
+   |
+
+error: cannot find macro `assert_eq` in this scope
+  --> src\crc.rs:52:9
+   |
+52 |         assert_eq!(crc32c(b"123456789"), 0xe306_9283);
+   |         ^^^^^^^^^
+   |
+help: consider importing this macro
+   |
+43 +     use core::assert_eq;
+   |
+
+error: cannot find attribute `test` in this scope
+  --> src\crc.rs:58:7
+   |
+58 |     #[test]
+   |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+  --> src\crc.rs:67:9
+   |
+67 |         assert_eq!(oneshot, streamed);
+   |         ^^^^^^^^^
+   |
+help: consider importing this macro
+   |
+43 +     use core::assert_eq;
+   |
+
+error: cannot find attribute `derive` in this scope
+ --> src\error.rs:9:3
+  |
+9 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\handoff.rs:24:3
+   |
+24 | #[derive(Debug, Clone, Copy)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\handoff.rs:40:3
+   |
+40 | #[derive(Debug, Clone, Copy)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+ --> src\iommu.rs:8:3
+  |
+8 | #[derive(Debug, Clone, Copy)]
+  |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\iommu.rs:12:3
+   |
+12 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\mm.rs:52:7
+   |
+52 |     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   |       ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\mm.rs:49:1
+   |
+49 | / bitflags! {
+50 | |     /// EPT page-table-entry flags (4 KiB leaf form). See module docs for
+51 | |     /// the bit assignment.
+52 | |     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+...  |
+67 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `$crate::__declare_internal_bitflags` which comes from the expansion of the macro `bitflags` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: cannot find attribute `derive` in this scope
+  --> src\mm.rs:90:3
+   |
+90 | #[derive(Debug)]
+   |   ^^^^^^
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:312:7
+    |
+312 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:316:9
+    |
+316 |         assert_eq!(idx, [2, 3, 4, 5]);
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:319:7
+    |
+319 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:332:9
+    |
+332 |         assert_eq!(r.as_u64(), hpa.as_u64() + 0x123);
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:335:7
+    |
+335 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `panic` in this scope
+   --> src\mm.rs:341:22
+    |
+341 |             other => panic!("expected Hardware, got {other:?}"),
+    |                      ^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::panic;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:345:7
+    |
+345 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\mm.rs:351:9
+    |
+351 |         assert!(matches!(
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:357:7
+    |
+357 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\mm.rs:361:9
+    |
+361 |         assert!(matches!(
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:372:7
+    |
+372 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:382:9
+    |
+382 |         assert_eq!(r.as_u64(), 0x20_000);
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:385:7
+    |
+385 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:398:13
+    |
+398 |             assert_eq!(e.translate(&f, gpa).unwrap().as_u64(), want);
+    |             ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\mm.rs:402:7
+    |
+402 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:407:9
+    |
+407 |         assert_eq!(v & 0b111, 0b110, "MT must be WB(6)");
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:408:9
+    |
+408 |         assert_eq!((v >> 3) & 0b111, 0b011, "walk length must be 4 (encoded as 3)");
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\mm.rs:409:9
+    |
+409 |         assert_eq!(v & ADDR_MASK, e.pml4().as_u64());
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+262 +     use core::assert_eq;
+    |
+
+error: cannot find attribute `derive` in this scope
+  --> src\sched.rs:21:3
+   |
+21 | #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\sched.rs:25:3
+   |
+25 | #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\sched.rs:30:3
+   |
+30 | #[derive(Debug, Clone, Copy)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\vm.rs:34:3
+   |
+34 | #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\vm.rs:39:3
+   |
+39 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   |   ^^^^^^
+
+error: cannot find macro `matches` in this scope
+  --> src\vm.rs:72:9
+   |
+72 |         matches!(self, Self::Halted | Self::Stopped | Self::Faulted)
+   |         ^^^^^^^
+   |
+help: consider importing this macro
+   |
+29 + use core::matches;
+   |
+
+error: cannot find attribute `derive` in this scope
+   --> src\vm.rs:188:3
+    |
+188 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+  --> src\wire.rs:91:3
+   |
+91 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> src\wire.rs:154:3
+    |
+154 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> src\wire.rs:203:3
+    |
+203 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> src\wire.rs:232:3
+    |
+232 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> src\wire.rs:256:3
+    |
+256 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> src\wire.rs:293:3
+    |
+293 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> src\wire.rs:336:3
+    |
+336 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    |   ^^^^^^
+
+error: cannot find macro `matches` in this scope
+   --> src\wire.rs:695:15
+    |
+695 |         while matches!(self.peek(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+    |               ^^^^^^^
+    |
+help: consider importing this macro
+    |
+61  + use core::matches;
+    |
+
+error: cannot find macro `matches` in this scope
+   --> src\wire.rs:719:15
+    |
+719 |         while matches!(self.peek(), Some(b'0'..=b'9')) {
+    |               ^^^^^^^
+    |
+help: consider importing this macro
+    |
+61  + use core::matches;
+    |
+
+error: cannot find macro `matches` in this scope
+   --> src\wire.rs:737:15
+    |
+737 |         while matches!(self.peek(), Some(b'0'..=b'9')) {
+    |               ^^^^^^^
+    |
+help: consider importing this macro
+    |
+61  + use core::matches;
+    |
+
+error: cannot find macro `matches` in this scope
+   --> src\wire.rs:792:24
+    |
+792 |                     if matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n') {
+    |                        ^^^^^^^
+    |
+help: consider importing this macro
+    |
+61  + use core::matches;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:876:7
+    |
+876 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:881:17
+    |
+881 |                 assert_eq!(label, b"hello");
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:882:17
+    |
+882 |                 assert!(image_path.is_none());
+    |                 ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:883:17
+    |
+883 |                 assert!(cpu_count.is_none());
+    |                 ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:884:17
+    |
+884 |                 assert!(memory_mib.is_none());
+    |                 ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:885:17
+    |
+885 |                 assert!(boot_blob_crc32c.is_none());
+    |                 ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `panic` in this scope
+   --> src\wire.rs:887:18
+    |
+887 |             _ => panic!("wrong variant"),
+    |                  ^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::panic;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:891:7
+    |
+891 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:897:17
+    |
+897 |                 assert_eq!(label, b"vm");
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:898:17
+    |
+898 |                 assert_eq!(image_path.unwrap(), b"/img/disk.raw");
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:899:17
+    |
+899 |                 assert_eq!(cpu_count, Some(2));
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:900:17
+    |
+900 |                 assert_eq!(memory_mib, Some(512));
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:901:17
+    |
+901 |                 assert_eq!(boot_blob_crc32c, Some(3_735_928_559));
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `panic` in this scope
+   --> src\wire.rs:903:18
+    |
+903 |             _ => panic!("wrong variant"),
+    |                  ^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::panic;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:907:7
+    |
+907 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:913:17
+    |
+913 |                 assert_eq!(label, b"vm");
+    |                 ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:914:17
+    |
+914 |                 assert!(image_path.is_none() && cpu_count.is_none() && memory_mib.is_none() && boot_blob_crc32c.is_none());
+    |                 ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `panic` in this scope
+   --> src\wire.rs:916:18
+    |
+916 |             _ => panic!("wrong variant"),
+    |                  ^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::panic;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:920:7
+    |
+920 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `format` in this scope
+   --> src\wire.rs:923:21
+    |
+923 |         let frame = format!(r#"{{"op":"create","label":"vm","image_path":"{big}"}}"#);
+    |                     ^^^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:925:9
+    |
+925 |         assert!(matches!(err, HyperError::Invalid(_)));
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:928:7
+    |
+928 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:933:9
+    |
+933 |         assert!(matches!(r, Request::Create { label, .. } if label == b"x"));
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:936:7
+    |
+936 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:938:9
+    |
+938 |         assert!(matches!(
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:942:9
+    |
+942 |         assert!(matches!(
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:946:9
+    |
+946 |         assert!(matches!(
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:950:9
+    |
+950 |         assert!(matches!(
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:956:7
+    |
+956 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `format` in this scope
+   --> src\wire.rs:959:21
+    |
+959 |         let frame = format!(r#"{{"op":"create","label":"{big}"}}"#);
+    |                     ^^^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:960:9
+    |
+960 |         assert!(decode_request(frame.as_bytes()).is_err());
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:963:7
+    |
+963 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:965:9
+    |
+965 |         assert!(decode_request(br#"{"op":"nope"}"#).is_err());
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:968:7
+    |
+968 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert` in this scope
+   --> src\wire.rs:970:9
+    |
+970 |         assert!(decode_request(br#"{"op":"create","label":"a\nb"}"#).is_err());
+    |         ^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:973:7
+    |
+973 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+   --> src\wire.rs:986:9
+    |
+986 |         assert_eq!(
+    |         ^^^^^^^^^
+    |
+help: consider importing this macro
+    |
+874 +     use core::assert_eq;
+    |
+
+error: cannot find attribute `test` in this scope
+   --> src\wire.rs:993:7
+    |
+993 |     #[test]
+    |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1006:9
+     |
+1006 |         assert_eq!(
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1013:7
+     |
+1013 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1039:9
+     |
+1039 |         assert!(line.starts_with(r#"{"reply":"listed","rows":["#));
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1040:9
+     |
+1040 |         assert!(line.contains(r#"{"vm_id":0,"label":"first","state":"created"}"#));
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1041:9
+     |
+1041 |         assert!(line.contains(r#"{"vm_id":1,"label":"","state":"halted","last_exit":12}"#));
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1042:9
+     |
+1042 |         assert!(line.ends_with("]}\n"));
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1045:7
+     |
+1045 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1061:9
+     |
+1061 |         assert!(line.contains(r#""image_path":"/img/disk.raw""#), "line={line}");
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1062:9
+     |
+1062 |         assert!(line.contains(r#""cpu_count":2"#), "line={line}");
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1063:9
+     |
+1063 |         assert!(line.contains(r#""memory_mib":512"#), "line={line}");
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1064:9
+     |
+1064 |         assert!(line.contains(r#""boot_blob_crc32c":3735928559"#), "line={line}");
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1067:7
+     |
+1067 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1071:9
+     |
+1071 |         assert!(matches!(err, HyperError::Exhausted(_)));
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1074:7
+     |
+1074 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1080:9
+     |
+1080 |         assert_eq!(
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1086:7
+     |
+1086 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1092:9
+     |
+1092 |         assert!(line.contains(r#""bad \"quoted\" \\ slash""#), "line={line}");
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1095:7
+     |
+1095 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1099:9
+     |
+1099 |         assert_eq!(b.as_slice().len(), ERROR_MSG_MAX);
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1104:7
+     |
+1104 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1142:13
+     |
+1142 |             assert_eq!(line, *expected, "encoding mismatch for {reply:?}");
+     |             ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1146:7
+     |
+1146 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1152:17
+     |
+1152 |                 assert_eq!(len, 3);
+     |                 ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1153:17
+     |
+1153 |                 assert_eq!(crc32c, 12345);
+     |                 ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1154:17
+     |
+1154 |                 assert_eq!(bytes_hex, b"abcdef");
+     |                 ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find macro `panic` in this scope
+    --> src\wire.rs:1156:18
+     |
+1156 |             _ => panic!("wrong variant"),
+     |                  ^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::panic;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1160:7
+     |
+1160 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1164:9
+     |
+1164 |         assert!(matches!(err, HyperError::Invalid(_)));
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1167:7
+     |
+1167 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1171:9
+     |
+1171 |         assert!(decode_request(frame).is_err());
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1174:9
+     |
+1174 |         assert!(decode_request(frame).is_err());
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1177:9
+     |
+1177 |         assert!(decode_request(frame).is_err());
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1180:7
+     |
+1180 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1188:9
+     |
+1188 |         assert_eq!(
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1194:7
+     |
+1194 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1198:9
+     |
+1198 |         assert_eq!(n, 4);
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1199:9
+     |
+1199 |         assert_eq!(&out[..n], &[0xDE, 0xAD, 0xBE, 0xEF]);
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1202:7
+     |
+1202 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert_eq` in this scope
+    --> src\wire.rs:1205:9
+     |
+1205 |         assert_eq!(hex_decode(b"", &mut out).unwrap(), 0);
+     |         ^^^^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert_eq;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1208:7
+     |
+1208 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1211:9
+     |
+1211 |         assert!(matches!(
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1217:7
+     |
+1217 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1220:9
+     |
+1220 |         assert!(matches!(
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1225:9
+     |
+1225 |         assert!(matches!(
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error: cannot find attribute `test` in this scope
+    --> src\wire.rs:1231:7
+     |
+1231 |     #[test]
+     |       ^^^^
+
+error: cannot find macro `assert` in this scope
+    --> src\wire.rs:1234:9
+     |
+1234 |         assert!(matches!(
+     |         ^^^^^^
+     |
+help: consider importing this macro
+     |
+874  +     use core::assert;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\arch\x86.rs:53:16
+   |
+53 |         return Err(HyperError::UnsupportedCpu("VMX disabled by firmware (locked)"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+4  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\arch\x86.rs:55:5
+   |
+55 |     Ok(())
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+4  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\cap.rs:63:13
+   |
+63 |             Ok(())
+   |             ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\cap.rs:65:13
+   |
+65 |             Err(crate::HyperError::Denied("rights mask"))
+   |             ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0412]: cannot find type `Vec` in this scope
+  --> src\crc.rs:60:20
+   |
+60 |         let bytes: Vec<u8> = (0..200u16).map(|i| (i & 0xff) as u8).collect();
+   |                    ^^^ not found in this scope
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\handoff.rs:82:20
+   |
+82 |             return Err(HyperError::InvalidHandoff("null pointer"));
+   |                    ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\handoff.rs:85:20
+   |
+85 |             return Err(HyperError::InvalidHandoff("misaligned"));
+   |                    ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\handoff.rs:90:20
+   |
+90 |             return Err(HyperError::InvalidHandoff("bad magic"));
+   |                    ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\handoff.rs:93:20
+   |
+93 |             return Err(HyperError::InvalidHandoff("version mismatch"));
+   |                    ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\handoff.rs:95:9
+   |
+95 |         Ok(h)
+   |         ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\iommu.rs:28:9
+   |
+28 |         Err(HyperError::Unimplemented("Iommu::init"))
+   |         ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+4  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\iommu.rs:33:9
+   |
+33 |         Err(HyperError::Unimplemented("Iommu::create_domain"))
+   |         ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+4  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\iommu.rs:40:9
+   |
+40 |         Err(HyperError::Unimplemented("Iommu::assign"))
+   |         ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+4  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\logger.rs:68:9
+   |
+68 |         Ok(())
+   |         ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\mm.rs:99:9
+   |
+99 |         Ok(Self { pml4 })
+   |         ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+26 + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\mm.rs:131:20
+    |
+131 |             return Err(HyperError::Hardware("ept::map_4k: misaligned GPA or HPA"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+26  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\mm.rs:134:20
+    |
+134 |             return Err(HyperError::Hardware("ept::map_4k: leaf must grant some access"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+26  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\mm.rs:155:9
+    |
+155 |         Ok(())
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+26  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\mm.rs:169:24
+    |
+169 |                 return Err(HyperError::Hardware("ept::translate: walk hit absent non-leaf"));
+    |                        ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+26  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\mm.rs:175:20
+    |
+175 |             return Err(HyperError::Hardware("ept::translate: leaf absent"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+26  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\mm.rs:178:9
+    |
+178 |         Ok(PhysAddr::new((leaf & ADDR_MASK) | off))
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+26  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\mm.rs:292:13
+    |
+292 |             Ok(PhysAddr::new(pa))
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+262 +     use core::result::Result::Ok;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Err` in this scope
+   --> src\mm.rs:340:13
+    |
+340 |             Err(HyperError::Hardware(_)) => {}
+    |             ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+262 +     use core::result::Result::Err;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+  --> src\sched.rs:45:22
+   |
+45 | static ACTIVE: Mutex<Option<&'static Vm>> = Mutex::new(None);
+   |                      ^^^^^^ not found in this scope
+   |
+help: consider importing this enum
+   |
+13 + use core::option::Option;
+   |
+
+error[E0425]: cannot find value `None` in this scope
+  --> src\sched.rs:45:56
+   |
+45 | static ACTIVE: Mutex<Option<&'static Vm>> = Mutex::new(None);
+   |                                                        ^^^^ not found in this scope
+   |
+help: consider importing this unit variant
+   |
+13 + use core::option::Option::None;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+  --> src\sched.rs:54:22
+   |
+54 |     *ACTIVE.lock() = Some(vm);
+   |                      ^^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+13 + use core::option::Option::Some;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\sched.rs:55:5
+   |
+55 |     Ok(())
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+13 + use core::result::Result::Ok;
+   |
+
+error[E0412]: cannot find type `Option` in this scope
+  --> src\sched.rs:59:26
+   |
+59 | pub fn clear_active() -> Option<&'static Vm> {
+   |                          ^^^^^^ not found in this scope
+   |
+help: consider importing this enum
+   |
+13 + use core::option::Option;
+   |
+
+error[E0405]: cannot find trait `FnOnce` in this scope
+  --> src\sched.rs:66:31
+   |
+66 | pub fn with_active<R>(f: impl FnOnce(Option<&'static Vm>) -> R) -> R {
+   |                               ^^^^^^ not found in this scope
+   |
+help: consider importing this trait
+   |
+13 + use core::ops::FnOnce;
+   |
+
+error[E0412]: cannot find type `Option` in this scope
+  --> src\sched.rs:66:38
+   |
+66 | pub fn with_active<R>(f: impl FnOnce(Option<&'static Vm>) -> R) -> R {
+   |                                      ^^^^^^ not found in this scope
+   |
+help: consider importing this enum
+   |
+13 + use core::option::Option;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\sched.rs:83:5
+   |
+83 |     Err(HyperError::Unimplemented("scheduler::admit_vcpu (week-7)"))
+   |     ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+13 + use core::result::Result::Err;
+   |
+
+error[E0412]: cannot find type `Option` in this scope
+  --> src\vm.rs:58:28
+   |
+58 |     fn from_u32(v: u32) -> Option<Self> {
+   |                            ^^^^^^ not found in this scope
+   |
+help: consider importing this enum
+   |
+29 + use core::option::Option;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+  --> src\vm.rs:59:9
+   |
+59 |         Some(match v {
+   |         ^^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+29 + use core::option::Option::Some;
+   |
+
+error[E0425]: cannot find value `None` in this scope
+  --> src\vm.rs:65:25
+   |
+65 |             _ => return None,
+   |                         ^^^^ not found in this scope
+   |
+help: consider importing this unit variant
+   |
+29 + use core::option::Option::None;
+   |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\vm.rs:132:39
+    |
+132 |     pub fn last_exit_reason(&self) -> Option<u32> {
+    |                                       ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+29  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\vm.rs:134:28
+    |
+134 |         if v == u32::MAX { None } else { Some(v) }
+    |                            ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+29  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\vm.rs:134:42
+    |
+134 |         if v == u32::MAX { None } else { Some(v) }
+    |                                          ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+29  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\vm.rs:153:9
+    |
+153 |         Ok(next)
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+29  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\vm.rs:165:34
+    |
+165 |         if from_created { return Ok(()); }
+    |                                  ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+29  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\vm.rs:172:34
+    |
+172 |         if from_running { return Ok(()); }
+    |                                  ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+29  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\vm.rs:173:9
+    |
+173 |         Err(HyperError::Denied("Vm::stop: not in Created/Running"))
+    |         ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+29  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\vmx\cpu.rs:36:16
+   |
+36 |         return Err(HyperError::UnsupportedCpu("IA32_VMX_BASIC width bit set"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+9  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\vmx\cpu.rs:38:5
+   |
+38 |     Ok((basic & 0x7FFF_FFFF) as u32)
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+9  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\vmx\cpu.rs:83:16
+   |
+83 |         return Err(HyperError::Hardware("vmxon: VMfailInvalid (CF=1)"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+9  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\vmx\cpu.rs:86:16
+   |
+86 |         return Err(HyperError::Hardware("vmxon: VMfailValid (ZF=1)"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+9  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\vmx\cpu.rs:88:5
+   |
+88 |     Ok(())
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+9  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\vmx\launch.rs:205:5
+    |
+205 |     Ok(())
+    |     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\vmx\launch.rs:235:16
+    |
+235 |         return Err(HyperError::Hardware("vmlaunch: VMfailInvalid"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Err;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Ok` in this scope
+   --> src\vmx\launch.rs:238:16
+    |
+238 |         if let Ok(code) = vmcs::vmread(f::VM_INSTRUCTION_ERROR) {
+    |                ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\vmx\launch.rs:241:16
+    |
+241 |         return Err(HyperError::Hardware("vmlaunch: VMfailValid"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\vmx\launch.rs:245:5
+    |
+245 |     Err(HyperError::Internal("vmlaunch returned without entering guest"))
+    |     ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\vmx\launch.rs:255:16
+    |
+255 |         return Err(HyperError::Hardware("guest blob > 4 KiB"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\vmx\launch.rs:276:5
+    |
+276 |     Ok(ept)
+    |     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+9   + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\vmx\region.rs:40:5
+   |
+40 |     Ok(pa)
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\vmx\region.rs:47:16
+   |
+47 |         return Err(HyperError::Internal("VmxPage size != 4 KiB"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\vmx\region.rs:50:16
+   |
+50 |         return Err(HyperError::Internal("VmxPage align != 4 KiB"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\vmx\region.rs:52:5
+   |
+52 |     Ok(())
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> src\vmx\vmcs.rs:86:5
+   |
+86 |     Ok(value)
+   |     ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> src\vmx\vmcs.rs:94:16
+   |
+94 |         return Err(HyperError::Hardware("vmx: VMfailInvalid"));
+   |                ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+8  + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\vmx\vmcs.rs:102:16
+    |
+102 |         return Err(HyperError::Hardware("vmx: VMfailValid"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+8   + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\vmx\vmcs.rs:104:5
+    |
+104 |     Ok(())
+    |     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+8   + use core::result::Result::Ok;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:102:21
+    |
+102 |         image_path: Option<&'a [u8]>,
+    |                     ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:105:20
+    |
+105 |         cpu_count: Option<u32>,
+    |                    ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:107:21
+    |
+107 |         memory_mib: Option<u64>,
+    |                     ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:111:27
+    |
+111 |         boot_blob_crc32c: Option<u32>,
+    |                           ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:168:20
+    |
+168 |         last_exit: Option<u32>,
+    |                    ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:178:16
+    |
+178 |         rows: [Option<Row>; ROWS_MAX],
+    |                ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:242:20
+    |
+242 |     pub last_exit: Option<u32>,
+    |                    ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:246:20
+    |
+246 |     pub cpu_count: Option<u32>,
+    |                    ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:248:21
+    |
+248 |     pub memory_mib: Option<u64>,
+    |                     ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:251:27
+    |
+251 |     pub boot_blob_crc32c: Option<u32>,
+    |                           ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:273:38
+    |
+273 |     pub fn from_slice(src: &[u8]) -> Option<Self> {
+    |                                      ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:275:20
+    |
+275 |             return None;
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:280:9
+    |
+280 |         Some(out)
+    |         ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:311:38
+    |
+311 |     pub fn from_slice(src: &[u8]) -> Option<Self> {
+    |                                      ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:313:20
+    |
+313 |             return None;
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:318:9
+    |
+318 |         Some(out)
+    |         ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:383:17
+    |
+383 |     let mut op: Option<&[u8]> = None;
+    |                 ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:383:33
+    |
+383 |     let mut op: Option<&[u8]> = None;
+    |                                 ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:384:20
+    |
+384 |     let mut label: Option<&[u8]> = None;
+    |                    ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:384:36
+    |
+384 |     let mut label: Option<&[u8]> = None;
+    |                                    ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:385:20
+    |
+385 |     let mut vm_id: Option<u32> = None;
+    |                    ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:385:34
+    |
+385 |     let mut vm_id: Option<u32> = None;
+    |                                  ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:386:25
+    |
+386 |     let mut image_path: Option<&[u8]> = None;
+    |                         ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:386:41
+    |
+386 |     let mut image_path: Option<&[u8]> = None;
+    |                                         ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:387:24
+    |
+387 |     let mut cpu_count: Option<u32> = None;
+    |                        ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:387:38
+    |
+387 |     let mut cpu_count: Option<u32> = None;
+    |                                      ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:388:25
+    |
+388 |     let mut memory_mib: Option<u64> = None;
+    |                         ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:388:39
+    |
+388 |     let mut memory_mib: Option<u64> = None;
+    |                                       ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:389:31
+    |
+389 |     let mut boot_blob_crc32c: Option<u32> = None;
+    |                               ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:389:45
+    |
+389 |     let mut boot_blob_crc32c: Option<u32> = None;
+    |                                             ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:390:18
+    |
+390 |     let mut len: Option<u32> = None;
+    |                  ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:390:32
+    |
+390 |     let mut len: Option<u32> = None;
+    |                                ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:391:21
+    |
+391 |     let mut crc32c: Option<u32> = None;
+    |                     ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:391:35
+    |
+391 |     let mut crc32c: Option<u32> = None;
+    |                                   ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:392:24
+    |
+392 |     let mut bytes_hex: Option<&[u8]> = None;
+    |                        ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:392:40
+    |
+392 |     let mut bytes_hex: Option<&[u8]> = None;
+    |                                        ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:395:24
+    |
+395 |         if s.peek() == Some(b'}') {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:405:22
+    |
+405 |                 op = Some(s.string()?);
+    |                      ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:409:25
+    |
+409 |                 label = Some(s.string()?);
+    |                         ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:413:25
+    |
+413 |                 vm_id = Some(s.u32_value()?);
+    |                         ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:420:34
+    |
+420 |                     image_path = None;
+    |                                  ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:422:34
+    |
+422 |                     image_path = Some(s.string()?);
+    |                                  ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:428:33
+    |
+428 |                     cpu_count = None;
+    |                                 ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:430:33
+    |
+430 |                     cpu_count = Some(s.u32_value()?);
+    |                                 ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:436:34
+    |
+436 |                     memory_mib = None;
+    |                                  ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:438:34
+    |
+438 |                     memory_mib = Some(s.u64_value()?);
+    |                                  ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> src\wire.rs:444:40
+    |
+444 |                     boot_blob_crc32c = None;
+    |                                        ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+61  + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:446:40
+    |
+446 |                     boot_blob_crc32c = Some(s.u32_value()?);
+    |                                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:451:23
+    |
+451 |                 len = Some(s.u32_value()?);
+    |                       ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:455:26
+    |
+455 |                 crc32c = Some(s.u32_value()?);
+    |                          ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:459:29
+    |
+459 |                 bytes_hex = Some(s.string()?);
+    |                             ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:464:24
+    |
+464 |         if s.peek() == Some(b',') {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:473:16
+    |
+473 |         return Err(HyperError::Invalid("wire: trailing bytes after request"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:481:24
+    |
+481 |                 return Err(HyperError::Invalid("wire: label > 32 chars"));
+    |                        ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:483:20
+    |
+483 |             if let Some(p) = image_path {
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:485:28
+    |
+485 |                     return Err(HyperError::Invalid("wire: image_path > 128 chars"));
+    |                            ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:488:13
+    |
+488 |             Ok(Request::Create {
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:496:21
+    |
+496 |         b"start" => Ok(Request::Start {
+    |                     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:499:20
+    |
+499 |         b"stop" => Ok(Request::Stop {
+    |                    ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:502:22
+    |
+502 |         b"delete" => Ok(Request::Delete {
+    |                      ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:505:20
+    |
+505 |         b"list" => Ok(Request::List),
+    |                    ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:516:24
+    |
+516 |                 return Err(HyperError::Invalid(
+    |                        ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:520:13
+    |
+520 |             Ok(Request::ImageLoad { len, crc32c, bytes_hex })
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:522:14
+    |
+522 |         _ => Err(HyperError::Invalid("wire: unknown op")),
+    |              ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:547:20
+    |
+547 |             if let Some(exit) = last_exit {
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:573:24
+    |
+573 |                 if let Some(exit) = row.last_exit {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:582:24
+    |
+582 |                 if let Some(c) = row.cpu_count {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:586:24
+    |
+586 |                 if let Some(m) = row.memory_mib {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:590:24
+    |
+590 |                 if let Some(crc) = row.boot_blob_crc32c {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:627:5
+    |
+627 |     Ok(w.pos)
+    |     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:640:16
+    |
+640 |         return Err(HyperError::Invalid("wire: hex_decode odd input length"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:644:16
+    |
+644 |         return Err(HyperError::Exhausted("wire: hex_decode dst too small"));
+    |                ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:653:5
+    |
+653 |     Ok(out_len)
+    |     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:659:24
+    |
+659 |         b'0'..=b'9' => Ok(b - b'0'),
+    |                        ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:660:24
+    |
+660 |         b'a'..=b'f' => Ok(10 + (b - b'a')),
+    |                        ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:661:14
+    |
+661 |         _ => Err(HyperError::Invalid("wire: hex_decode non-hex byte")),
+    |              ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:677:23
+    |
+677 |     fn peek(&self) -> Option<u8> { self.buf.get(self.pos).copied() }
+    |                       ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0412]: cannot find type `Option` in this scope
+   --> src\wire.rs:679:27
+    |
+679 |     fn bump(&mut self) -> Option<u8> {
+    |                           ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+61  + use core::option::Option;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:682:9
+    |
+682 |         Some(b)
+    |         ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:689:13
+    |
+689 |             Some(b) if b == want => Ok(()),
+    |             ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:689:37
+    |
+689 |             Some(b) if b == want => Ok(()),
+    |                                     ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:690:18
+    |
+690 |             _ => Err(HyperError::Invalid("wire: unexpected byte")),
+    |                  ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:703:19
+    |
+703 |         while let Some(b) = self.peek() {
+    |                   ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:707:24
+    |
+707 |                 return Ok(s);
+    |                        ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:710:24
+    |
+710 |                 return Err(HyperError::Invalid("wire: escapes not allowed"));
+    |                        ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:714:9
+    |
+714 |         Err(HyperError::Invalid("wire: unterminated string"))
+    |         ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:723:20
+    |
+723 |             return Err(HyperError::Invalid("wire: expected number"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:732:9
+    |
+732 |         Ok(acc)
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:741:20
+    |
+741 |             return Err(HyperError::Invalid("wire: expected number"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:750:9
+    |
+750 |         Ok(acc)
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:758:52
+    |
+758 |         if self.buf.get(self.pos..self.pos + 4) == Some(b"null") {
+    |                                                    ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:773:47
+    |
+773 |             b'"' => { let _ = self.string()?; Ok(()) }
+    |                                               ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:788:17
+    |
+788 |                 Ok(())
+    |                 ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:791:27
+    |
+791 |                 while let Some(b) = self.peek() {
+    |                           ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:797:17
+    |
+797 |                 Ok(())
+    |                 ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:817:20
+    |
+817 |             return Err(HyperError::Exhausted("wire: reply buffer too small"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:821:9
+    |
+821 |         Ok(())
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> src\wire.rs:826:20
+    |
+826 |             return Err(HyperError::Exhausted("wire: reply buffer too small"));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> src\wire.rs:830:9
+    |
+830 |         Ok(())
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+61  + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> src\wire.rs:980:28
+    |
+980 |                 last_exit: Some(12),
+    |                            ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+874 +     use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1000:28
+     |
+1000 |                 last_exit: None,
+     |                            ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0412]: cannot find type `Option` in this scope
+    --> src\wire.rs:1015:24
+     |
+1015 |         let mut rows: [Option<Row>; ROWS_MAX] = [None; ROWS_MAX];
+     |                        ^^^^^^ not found in this scope
+     |
+help: consider importing this enum
+     |
+874  +     use core::option::Option;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1015:50
+     |
+1015 |         let mut rows: [Option<Row>; ROWS_MAX] = [None; ROWS_MAX];
+     |                                                  ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1016:19
+     |
+1016 |         rows[0] = Some(Row {
+     |                   ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1020:24
+     |
+1020 |             last_exit: None,
+     |                        ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1022:24
+     |
+1022 |             cpu_count: None,
+     |                        ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1023:25
+     |
+1023 |             memory_mib: None,
+     |                         ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1024:31
+     |
+1024 |             boot_blob_crc32c: None,
+     |                               ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1026:19
+     |
+1026 |         rows[1] = Some(Row {
+     |                   ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1030:24
+     |
+1030 |             last_exit: Some(12),
+     |                        ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1032:24
+     |
+1032 |             cpu_count: None,
+     |                        ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1033:25
+     |
+1033 |             memory_mib: None,
+     |                         ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1034:31
+     |
+1034 |             boot_blob_crc32c: None,
+     |                               ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0412]: cannot find type `Option` in this scope
+    --> src\wire.rs:1047:24
+     |
+1047 |         let mut rows: [Option<Row>; ROWS_MAX] = [None; ROWS_MAX];
+     |                        ^^^^^^ not found in this scope
+     |
+help: consider importing this enum
+     |
+874  +     use core::option::Option;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1047:50
+     |
+1047 |         let mut rows: [Option<Row>; ROWS_MAX] = [None; ROWS_MAX];
+     |                                                  ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1048:19
+     |
+1048 |         rows[0] = Some(Row {
+     |                   ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1052:24
+     |
+1052 |             last_exit: None,
+     |                        ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1054:24
+     |
+1054 |             cpu_count: Some(2),
+     |                        ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1055:25
+     |
+1055 |             memory_mib: Some(512),
+     |                         ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1056:31
+     |
+1056 |             boot_blob_crc32c: Some(0xDEAD_BEEF),
+     |                               ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+    --> src\wire.rs:1120:78
+     |
+1120 |                 Reply::State { vm_id: 0, state: StateTag::Halted, last_exit: Some(12) },
+     |                                                                              ^^^^ not found in this scope
+     |
+help: consider importing this tuple variant
+     |
+874  +     use core::option::Option::Some;
+     |
+
+error[E0425]: cannot find value `None` in this scope
+    --> src\wire.rs:1124:79
+     |
+1124 |                 Reply::State { vm_id: 2, state: StateTag::Stopped, last_exit: None },
+     |                                                                               ^^^^ not found in this scope
+     |
+help: consider importing this unit variant
+     |
+874  +     use core::option::Option::None;
+     |
+
+Some errors have detailed explanations: E0405, E0412, E0425, E0463, E0531.
+For more information about an error, try `rustc --explain E0405`.
+error: could not compile `celhyper` (lib test) due to 329 previous errors
+
