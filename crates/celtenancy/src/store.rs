@@ -104,6 +104,67 @@ pub trait TenantStore: Send + Sync {
     /// * [`CelError::Invalid`] on an unknown tenant.
     /// * [`CelError::Storage`] when the persistence layer fails.
     fn release(&self, tenant: TenantId, charge: QuotaCharge) -> CelResult<QuotaUsage>;
+
+    /// Convenience: create a subtenant under `parent` (W31).
+    ///
+    /// Equivalent to `self.create(spec.with_parent(parent), caps)`.
+    /// The store enforces caps ⊆ parent caps and per-dimension
+    /// quotas ≤ parent quotas at creation time, then propagates
+    /// charge/release calls up the ancestor chain.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::create`], plus
+    /// [`CelError::CapabilityDenied`] on cap escalation and
+    /// [`CelError::Invalid`] when a quota dimension exceeds the
+    /// parent ceiling.
+    fn create_subtenant(
+        &self,
+        parent: TenantId,
+        spec: TenantSpec,
+        root_caps: TenantCaps,
+    ) -> CelResult<Tenant> {
+        self.create(spec.with_parent(parent), root_caps)
+    }
+
+    /// Direct children of `parent` (W31). Default implementation
+    /// snapshots [`Self::list`] and filters by `parent` field.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces any error from [`Self::list`].
+    fn children(&self, parent: TenantId) -> CelResult<Vec<Tenant>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|t| t.parent == Some(parent))
+            .collect())
+    }
+
+    /// Walk the ancestor chain from `id` toward the root (W31).
+    /// Returned vector excludes `id` itself; the first element is
+    /// the direct parent.
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on an unknown tenant.
+    /// * [`CelError::Internal`] if the chain exceeds 64 levels
+    ///   (cycle or corruption guard).
+    fn ancestors(&self, id: TenantId) -> CelResult<Vec<Tenant>> {
+        let mut out = Vec::new();
+        let mut cur = self.get(id)?.parent;
+        let mut depth = 0u32;
+        while let Some(p) = cur {
+            if depth > 64 {
+                return Err(CelError::Internal("tenant hierarchy too deep"));
+            }
+            let t = self.get(p)?;
+            cur = t.parent;
+            out.push(t);
+            depth += 1;
+        }
+        Ok(out)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +187,32 @@ impl StoreState {
                 spec.name
             )));
         }
+        // W31 — subtenant validation: parent must exist; caps must
+        // be a subset of parent's root_caps; each quota dimension
+        // must be ≤ parent's corresponding ceiling.
+        if let Some(parent_id) = spec.parent {
+            let parent = self
+                .tenants
+                .get(&parent_id.0)
+                .ok_or(CelError::Invalid("parent tenant id unknown"))?;
+            if !parent.root_caps.contains(root_caps) {
+                return Err(CelError::CapabilityDenied(
+                    "subtenant caps exceed parent",
+                ));
+            }
+            let q = &spec.quotas;
+            let pq = &parent.quotas;
+            if q.max_vcpus > pq.max_vcpus
+                || q.max_memory_mib > pq.max_memory_mib
+                || q.max_storage_bytes > pq.max_storage_bytes
+                || q.max_network_mbps > pq.max_network_mbps
+                || q.max_iops > pq.max_iops
+            {
+                return Err(CelError::Invalid(
+                    "subtenant quotas exceed parent quotas",
+                ));
+            }
+        }
         let id_raw = self.next_tenant_id.checked_add(1).ok_or(
             CelError::Internal("tenant id overflow"),
         )?;
@@ -139,6 +226,7 @@ impl StoreState {
             users: Vec::new(),
             quotas: spec.quotas,
             usage: QuotaUsage::default(),
+            parent: spec.parent,
         };
         self.by_name.insert(spec.name, id_raw);
         self.tenants.insert(id_raw, tenant.clone());
@@ -150,6 +238,18 @@ impl StoreState {
             .tenants
             .get(&id.0)
             .ok_or(CelError::Invalid("tenant id unknown"))?;
+        // W31 — refuse if any live subtenant points at us. Run this
+        // check ahead of the usage guard because a parent's usage
+        // is propagated from its children, so deleting a parent
+        // while a child lives would otherwise surface as the less
+        // actionable "tenant in use".
+        if self
+            .tenants
+            .values()
+            .any(|child| child.parent == Some(id))
+        {
+            return Err(CelError::Invalid("tenant has subtenants"));
+        }
         if t.usage != QuotaUsage::default() {
             return Err(CelError::Invalid("tenant in use"));
         }
@@ -200,23 +300,81 @@ impl StoreState {
     }
 
     fn charge(&mut self, tenant: TenantId, charge: QuotaCharge) -> CelResult<QuotaUsage> {
-        let t = self
-            .tenants
-            .get_mut(&tenant.0)
-            .ok_or(CelError::Invalid("tenant id unknown"))?;
-        let new_usage = charge_quota(t.usage, t.quotas, charge)?;
-        t.usage = new_usage;
-        Ok(new_usage)
+        // W31 — charge propagates up the ancestor chain. The whole
+        // chain must accept the charge or none of it is applied
+        // (we validate in pass 1, mutate in pass 2; the mutex
+        // makes this atomic against concurrent callers).
+        let chain = self.chain_from(tenant)?;
+        for tid in &chain {
+            let t = self
+                .tenants
+                .get(&tid.0)
+                .ok_or(CelError::Internal("tenant disappeared mid-charge"))?;
+            // Surface ancestor exhaustion with a tag that includes
+            // the ancestor name so operators can tell which level
+            // ran out.
+            charge_quota(t.usage, t.quotas, charge).map_err(|e| match e {
+                CelError::Exhausted(tag) if *tid != tenant => {
+                    CelError::Exhausted(tag)
+                }
+                other => other,
+            })?;
+        }
+        let mut new_self = QuotaUsage::default();
+        for (i, tid) in chain.iter().enumerate() {
+            let t = self
+                .tenants
+                .get_mut(&tid.0)
+                .ok_or(CelError::Internal("tenant disappeared mid-charge"))?;
+            let new = charge_quota(t.usage, t.quotas, charge)
+                .map_err(|_| CelError::Internal("quota validation race"))?;
+            t.usage = new;
+            if i == 0 {
+                new_self = new;
+            }
+        }
+        Ok(new_self)
     }
 
     fn release(&mut self, tenant: TenantId, charge: QuotaCharge) -> CelResult<QuotaUsage> {
-        let t = self
-            .tenants
-            .get_mut(&tenant.0)
-            .ok_or(CelError::Invalid("tenant id unknown"))?;
-        let new_usage = release_quota(t.usage, charge);
-        t.usage = new_usage;
-        Ok(new_usage)
+        // W31 — release propagates the same way (saturating, so
+        // never fails on math). A double-release silently floors
+        // at zero on every level.
+        let chain = self.chain_from(tenant)?;
+        let mut new_self = QuotaUsage::default();
+        for (i, tid) in chain.iter().enumerate() {
+            let t = self
+                .tenants
+                .get_mut(&tid.0)
+                .ok_or(CelError::Internal("tenant disappeared mid-release"))?;
+            t.usage = release_quota(t.usage, charge);
+            if i == 0 {
+                new_self = t.usage;
+            }
+        }
+        Ok(new_self)
+    }
+
+    /// Walk `tenant → parent → grandparent → …` returning ids
+    /// in that order. Refuses chains deeper than 64 levels to
+    /// catch accidental cycles or corruption.
+    fn chain_from(&self, tenant: TenantId) -> CelResult<Vec<TenantId>> {
+        let mut out = Vec::new();
+        let mut cur = Some(tenant);
+        let mut depth = 0u32;
+        while let Some(tid) = cur {
+            if depth > 64 {
+                return Err(CelError::Internal("tenant hierarchy too deep"));
+            }
+            let t = self
+                .tenants
+                .get(&tid.0)
+                .ok_or(CelError::Invalid("tenant id unknown"))?;
+            out.push(tid);
+            cur = t.parent;
+            depth += 1;
+        }
+        Ok(out)
     }
 }
 
@@ -588,13 +746,236 @@ mod tests {
 
     fn tempdir() -> PathBuf {
         // Best-effort scratch path inside the workspace target dir
-        // so we don't depend on a tempfile crate.
+        // so we don't depend on a tempfile crate. A per-call atomic
+        // counter keeps parallel tests in the same process from
+        // stomping on each other.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "celtenancy-test-{}",
+            "celtenancy-test-{}-{n}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).expect("create temp dir for test");
         base
+    }
+
+    // -----------------------------------------------------------
+    // W31 — nested tenants
+    // -----------------------------------------------------------
+
+    fn small_quotas(vcpus: u32) -> TenantQuotas {
+        TenantQuotas {
+            max_vcpus: vcpus,
+            max_memory_mib: u64::from(vcpus) * 1024,
+            max_storage_bytes: u64::from(vcpus) * 1024 * 1024,
+            max_network_mbps: vcpus * 100,
+            max_iops: vcpus * 1000,
+        }
+    }
+
+    #[test]
+    fn subtenant_inherits_parent_field() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(8)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(4)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        assert_eq!(c.parent, Some(p.id));
+        // Top-level tenant has no parent.
+        assert_eq!(p.parent, None);
+        let kids = s.children(p.id).unwrap();
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].id, c.id);
+        let ancs = s.ancestors(c.id).unwrap();
+        assert_eq!(ancs.len(), 1);
+        assert_eq!(ancs[0].id, p.id);
+    }
+
+    #[test]
+    fn subtenant_caps_must_be_subset_of_parent() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(
+                TenantSpec::new("p", small_quotas(8)).unwrap(),
+                TenantCaps::VM_LIFECYCLE_READ | TenantCaps::VM_LIFECYCLE_WRITE,
+            )
+            .unwrap();
+        // Escalation: parent has no VOLUME_WRITE.
+        let err = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(2)).unwrap(),
+                TenantCaps::VOLUME_WRITE,
+            )
+            .unwrap_err();
+        assert!(matches!(err, CelError::CapabilityDenied(_)));
+    }
+
+    #[test]
+    fn subtenant_quotas_cannot_exceed_parent() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(4)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let err = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(8)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap_err();
+        assert!(matches!(err, CelError::Invalid("subtenant quotas exceed parent quotas")));
+    }
+
+    #[test]
+    fn charge_propagates_to_ancestors() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(8)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(4)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        let charge = QuotaCharge {
+            vcpus: 2,
+            ..Default::default()
+        };
+        let cu = s.charge(c.id, charge).unwrap();
+        assert_eq!(cu.vcpus, 2);
+        // Parent usage reflects the child's charge.
+        let p_after = s.get(p.id).unwrap();
+        assert_eq!(p_after.usage.vcpus, 2);
+    }
+
+    #[test]
+    fn charge_fails_when_ancestor_exhausted() {
+        let s = MemTenantStore::new();
+        // Parent only has 4 vCPUs even though it owns a child
+        // with a 4-vCPU child quota.
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(4)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(4)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        // Burn 3 vCPUs against the parent directly.
+        s.charge(
+            p.id,
+            QuotaCharge {
+                vcpus: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Child tries to take 2 — fits child's own quota, but
+        // would push parent to 5/4. Must be rejected, and no
+        // partial state must land on the child.
+        let err = s
+            .charge(
+                c.id,
+                QuotaCharge {
+                    vcpus: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, CelError::Exhausted("quota.vcpus")));
+        let c_after = s.get(c.id).unwrap();
+        assert_eq!(c_after.usage.vcpus, 0);
+        let p_after = s.get(p.id).unwrap();
+        assert_eq!(p_after.usage.vcpus, 3);
+    }
+
+    #[test]
+    fn release_propagates_to_ancestors() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(8)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(4)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        let charge = QuotaCharge {
+            vcpus: 2,
+            ..Default::default()
+        };
+        s.charge(c.id, charge).unwrap();
+        let cu = s.release(c.id, charge).unwrap();
+        assert_eq!(cu, QuotaUsage::default());
+        let p_after = s.get(p.id).unwrap();
+        assert_eq!(p_after.usage, QuotaUsage::default());
+    }
+
+    #[test]
+    fn cannot_delete_parent_with_live_subtenant() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(8)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(2)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        let err = s.delete(p.id).unwrap_err();
+        assert!(matches!(err, CelError::Invalid("tenant has subtenants")));
+        // Deleting child first unblocks parent.
+        s.delete(c.id).unwrap();
+        s.delete(p.id).unwrap();
+    }
+
+    #[test]
+    fn file_store_persists_parent_field_across_reopen() {
+        let dir = tempdir();
+        let path = dir.join("tenants.json");
+        let s = FileTenantStore::open(&path).unwrap();
+        let p = s
+            .create(TenantSpec::new("p", small_quotas(8)).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", small_quotas(2)).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        s.charge(
+            c.id,
+            QuotaCharge {
+                vcpus: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        drop(s);
+
+        let s2 = FileTenantStore::open(&path).unwrap();
+        let c2 = s2.get_by_name("c").unwrap();
+        assert_eq!(c2.parent, Some(p.id));
+        let p2 = s2.get_by_name("p").unwrap();
+        assert_eq!(p2.usage.vcpus, 1);
+        assert_eq!(s2.children(p2.id).unwrap().len(), 1);
     }
 }

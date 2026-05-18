@@ -432,3 +432,138 @@ pretty-printed `Vec<AuditEvent>`). `stats` returns one line:
 * `ExecOptions` no longer derives `Serialize` / `Deserialize`
   because it now holds an `Arc<dyn AuditSink>`. The output
   `ExecAudit` shape is unchanged and remains fully serializable.
+
+---
+
+## W31 — Nested Tenants
+
+> Adds a parent/child hierarchy to the tenant store. Subtenants
+> inherit a subset of the parent's caps and per-dimension quotas;
+> charge/release calls propagate up the ancestor chain so a
+> parent's usage always equals the sum of its own direct charges
+> plus every descendant. The Core Layer is untouched — projection
+> still happens through `TenantCaps::to_mesh_capabilities()` at
+> the same single seam.
+
+### `celtenancy::tenant`
+
+```rust
+pub struct TenantSpec {
+    pub name:   String,
+    pub quotas: TenantQuotas,
+    #[serde(default)]
+    pub parent: Option<TenantId>,   // NEW
+}
+
+impl TenantSpec {
+    pub fn new(name, quotas) -> CelResult<Self>;        // parent = None
+    pub fn with_parent(self, parent: TenantId) -> Self; // builder
+}
+
+pub struct Tenant {
+    /* …existing fields… */
+    #[serde(default)]
+    pub parent: Option<TenantId>,   // NEW; migration-safe
+}
+```
+
+Existing on-disk `tenants.json` files written by W27..W30 reopen
+unchanged: every record gets `parent = None` from `#[serde(default)]`.
+
+### `celtenancy::TenantStore` — new default methods
+
+```rust
+pub trait TenantStore: Send + Sync {
+    /* …existing required methods… */
+
+    fn create_subtenant(&self, parent: TenantId, spec: TenantSpec, caps: TenantCaps)
+        -> CelResult<Tenant>;       // sugar over create(spec.with_parent(p), caps)
+
+    fn children(&self, parent: TenantId) -> CelResult<Vec<Tenant>>;
+    fn ancestors(&self, id:     TenantId) -> CelResult<Vec<Tenant>>;
+}
+```
+
+`children` filters `list()` by `parent == Some(...)`. `ancestors`
+walks the parent chain (refuses depth > 64 as a corruption guard,
+surfacing `CelError::Internal("tenant hierarchy too deep")`).
+
+### Validation rules (enforced inside `create`)
+
+When `spec.parent = Some(p)`:
+
+1. **Parent must exist** — else `CelError::Invalid("parent tenant id unknown")`.
+2. **Caps ⊆ parent caps** — else `CelError::CapabilityDenied("subtenant caps exceed parent")`.
+3. **Each quota dimension ≤ parent quota** — else `CelError::Invalid("subtenant quotas exceed parent quotas")`.
+
+### Charge / release propagation
+
+`charge(child, c)` now walks `[child, parent, grandparent, …]`:
+
+1. **Validate pass** — `charge_quota` is called against every
+   ancestor's *current* usage/quota. If any level would exceed,
+   the whole call fails with the standard `CelError::Exhausted("quota.…")`
+   tag of the first dimension that ran out. **No partial state
+   ever lands** (mutex held the whole time).
+2. **Apply pass** — the validated charge is added to every level.
+
+`release(child, c)` does the same walk with saturating subtraction
+so a double-release floors at zero on every level. Both methods
+return the **child's** new `QuotaUsage`.
+
+### Delete semantics
+
+`delete(parent)` now checks subtenants *before* usage:
+
+* `CelError::Invalid("tenant has subtenants")` — refuses while
+  any child points at `parent` (more actionable than the
+  cascading "tenant in use" that propagated usage would otherwise
+  surface).
+* `CelError::Invalid("tenant in use")` — only after the subtenant
+  guard clears, for direct usage on the tenant itself.
+
+### CLI
+
+```text
+celctl tenant subtenant create --parent NAME --name NAME [--max-vcpus N …]
+                               [--caps inherit|tag,tag,…]
+celctl tenant subtenant list   --parent NAME
+celctl tenant tree
+```
+
+* `--caps inherit` (default) copies the parent's `root_caps` verbatim.
+  Any other value goes through the standard tag parser; the store
+  enforces ⊆ parent at insert time.
+* `tenant tree` walks the store and prints every top-level tenant
+  with its descendants indented, including per-node `vcpus=used/max`
+  and `mem=used/max MiB` so an operator can read pressure at a
+  glance.
+
+### Test coverage
+
+* `crates/celtenancy/src/store.rs` — 8 unit tests
+  (`subtenant_inherits_parent_field`,
+  `subtenant_caps_must_be_subset_of_parent`,
+  `subtenant_quotas_cannot_exceed_parent`,
+  `charge_propagates_to_ancestors`,
+  `charge_fails_when_ancestor_exhausted`,
+  `release_propagates_to_ancestors`,
+  `cannot_delete_parent_with_live_subtenant`,
+  `file_store_persists_parent_field_across_reopen`).
+* `crates/celtest/tests/tenant_nested_e2e.rs` — 5 e2e tests
+  driving a `FileTenantStore` end-to-end through subtenant
+  lifecycle, cap escalation, quota overshoot, atomic-on-failure
+  charging, and process-restart durability.
+
+### Limitations
+
+* Names are still **globally unique** across the store (subtenants
+  cannot share a name with anything else). A future iteration may
+  introduce parent-scoped names; doing so today would ripple into
+  the namespace shape that the Core Layer projects.
+* Sibling quotas are not co-validated. The parent's quota acts as
+  the ceiling on actual usage via propagation; operators can
+  intentionally overcommit child quotas if they want
+  best-effort sharing.
+
+---

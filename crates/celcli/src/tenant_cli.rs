@@ -67,6 +67,60 @@ pub enum TenantCmd {
         #[command(subcommand)]
         op: AuditCmd,
     },
+    /// Nested tenant management (W31).
+    Subtenant {
+        #[command(subcommand)]
+        op: SubtenantCmd,
+    },
+    /// Print the tenant tree rooted at every top-level tenant (W31).
+    Tree(StoreArgs),
+}
+
+/// `celctl tenant subtenant <op>` dispatch enum.
+#[derive(Debug, Subcommand)]
+pub enum SubtenantCmd {
+    /// Create a subtenant under an existing parent.
+    Create(SubtenantCreateArgs),
+    /// List direct children of a parent tenant.
+    List {
+        #[command(flatten)]
+        store: StoreArgs,
+        /// Parent tenant name.
+        #[arg(long)]
+        parent: String,
+    },
+}
+
+/// Arguments for `tenant subtenant create`.
+#[derive(Debug, Args, Clone)]
+pub struct SubtenantCreateArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Parent tenant name.
+    #[arg(long)]
+    pub parent: String,
+    /// Subtenant name (must be globally unique across the store).
+    #[arg(long)]
+    pub name: String,
+    /// Maximum vCPUs. Must be ≤ parent's `max_vcpus`.
+    #[arg(long, default_value_t = 4)]
+    pub max_vcpus: u32,
+    /// Maximum RAM (MiB). Must be ≤ parent's `max_memory_mib`.
+    #[arg(long, default_value_t = 4 * 1024)]
+    pub max_memory_mib: u64,
+    /// Maximum persistent storage (bytes). Must be ≤ parent's `max_storage_bytes`.
+    #[arg(long, default_value_t = 10 * 1024 * 1024 * 1024)]
+    pub max_storage_bytes: u64,
+    /// Maximum network throughput (Mbps). Must be ≤ parent's `max_network_mbps`.
+    #[arg(long, default_value_t = 1_000)]
+    pub max_network_mbps: u32,
+    /// Maximum IOPS. Must be ≤ parent's `max_iops`.
+    #[arg(long, default_value_t = 5_000)]
+    pub max_iops: u32,
+    /// Capability tags (must be ⊆ parent root caps).
+    /// Default `inherit` copies parent's root caps verbatim.
+    #[arg(long, default_value = "inherit")]
+    pub caps: String,
 }
 
 /// `celctl tenant exec <op>` dispatch enum.
@@ -373,6 +427,8 @@ pub fn run(cmd: TenantCmd) -> CelResult<()> {
         TenantCmd::Quota { op } => run_quota(op),
         TenantCmd::Exec { op } => run_exec(op),
         TenantCmd::Audit { op } => run_audit(op),
+        TenantCmd::Subtenant { op } => run_subtenant(op),
+        TenantCmd::Tree(s) => run_tree(&s),
     }
 }
 
@@ -598,3 +654,89 @@ fn run_audit(op: AuditCmd) -> CelResult<()> {
     }
 }
 
+fn run_subtenant(op: SubtenantCmd) -> CelResult<()> {
+    match op {
+        SubtenantCmd::Create(a) => {
+            let store = open(&a.store)?;
+            let parent = store.get_by_name(&a.parent)?;
+            // `inherit` is a CLI sugar that copies the parent's
+            // root caps verbatim. Any other value goes through the
+            // standard tag parser, and the store enforces ⊆ parent.
+            let caps = if a.caps.eq_ignore_ascii_case("inherit") {
+                parent.root_caps
+            } else {
+                TenantCaps::parse_tags(&a.caps)?
+            };
+            let spec = TenantSpec::new(
+                a.name,
+                TenantQuotas {
+                    max_vcpus: a.max_vcpus,
+                    max_memory_mib: a.max_memory_mib,
+                    max_storage_bytes: a.max_storage_bytes,
+                    max_network_mbps: a.max_network_mbps,
+                    max_iops: a.max_iops,
+                },
+            )?;
+            let t = store.create_subtenant(parent.id, spec, caps)?;
+            println!(
+                "{}  name={}  parent={}  ns={}  caps={}",
+                t.id,
+                t.name,
+                parent.name,
+                t.namespace,
+                t.root_caps.to_tags()
+            );
+            Ok(())
+        }
+        SubtenantCmd::List { store, parent } => {
+            let s = open(&store)?;
+            let p = s.get_by_name(&parent)?;
+            let kids = s.children(p.id)?;
+            println!("{:<14}  {:<24}  {}", "ID", "NAME", "NAMESPACE");
+            for c in kids {
+                println!("{:<14}  {:<24}  {}", c.id.to_string(), c.name, c.namespace);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn run_tree(args: &StoreArgs) -> CelResult<()> {
+    let s = open(args)?;
+    let all = s.list()?;
+    // Index children by parent id for O(N) tree print.
+    let mut by_parent: std::collections::BTreeMap<Option<u64>, Vec<&celtenancy::Tenant>> =
+        std::collections::BTreeMap::new();
+    for t in &all {
+        by_parent
+            .entry(t.parent.map(celtenancy::TenantId::raw))
+            .or_default()
+            .push(t);
+    }
+    fn print_subtree(
+        node: &celtenancy::Tenant,
+        depth: usize,
+        by_parent: &std::collections::BTreeMap<Option<u64>, Vec<&celtenancy::Tenant>>,
+    ) {
+        let pad = "  ".repeat(depth);
+        println!(
+            "{pad}{}  vcpus={}/{}  mem={}/{} MiB",
+            node.name,
+            node.usage.vcpus,
+            node.quotas.max_vcpus,
+            node.usage.memory_mib,
+            node.quotas.max_memory_mib,
+        );
+        if let Some(kids) = by_parent.get(&Some(node.id.raw())) {
+            for k in kids {
+                print_subtree(k, depth + 1, by_parent);
+            }
+        }
+    }
+    if let Some(roots) = by_parent.get(&None) {
+        for r in roots {
+            print_subtree(r, 0, &by_parent);
+        }
+    }
+    Ok(())
+}

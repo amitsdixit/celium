@@ -38,10 +38,19 @@ pub struct TenantSpec {
     pub name: String,
     /// Quotas applied to this tenant.
     pub quotas: TenantQuotas,
+    /// Optional parent tenant (W31 — nested tenants).
+    ///
+    /// When set the store enforces:
+    /// * caps must be a subset of parent's `root_caps`
+    /// * every quota dimension must be ≤ parent's quota
+    /// * charges propagate up the ancestor chain
+    /// * parent cannot be deleted while children live
+    #[serde(default)]
+    pub parent: Option<TenantId>,
 }
 
 impl TenantSpec {
-    /// Construct + validate.
+    /// Construct + validate (top-level tenant — no parent).
     ///
     /// # Errors
     ///
@@ -50,7 +59,21 @@ impl TenantSpec {
     pub fn new(name: impl Into<String>, quotas: TenantQuotas) -> CelResult<Self> {
         let name = name.into();
         validate_segment(&name)?;
-        Ok(Self { name, quotas })
+        Ok(Self {
+            name,
+            quotas,
+            parent: None,
+        })
+    }
+
+    /// Builder: attach this spec to a parent tenant. Use together
+    /// with [`crate::TenantStore::create`] (or the convenience
+    /// [`crate::TenantStore::create_subtenant`]) to register a
+    /// subtenant under `parent`.
+    #[must_use]
+    pub fn with_parent(mut self, parent: TenantId) -> Self {
+        self.parent = Some(parent);
+        self
     }
 }
 
@@ -75,6 +98,11 @@ pub struct Tenant {
     /// Running usage counters; never persisted out of sync with the
     /// resources they describe.
     pub usage: QuotaUsage,
+    /// Parent tenant id when this is a subtenant (W31). `None` for
+    /// top-level tenants. Migration-safe: existing JSON files
+    /// without this field default to `None`.
+    #[serde(default)]
+    pub parent: Option<TenantId>,
 }
 
 impl Tenant {
