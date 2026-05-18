@@ -4,8 +4,8 @@
 > No Linux host, no KVM, no inherited hypervisor — Celium owns the silicon
 > from UEFI boot all the way up to a Kubernetes-shaped operator surface.
 
-[![Status](https://img.shields.io/badge/status-W26%20Core%20Layer%20signed--off-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-197%20pass%20%2F%202%20flake%20%2F%207%20ignored-brightgreen)]()
+[![Status](https://img.shields.io/badge/status-W31%20Nested%20Tenants-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-258%20pass%20%2F%201%20known%20flake%20%2F%207%20ignored-brightgreen)]()
 [![Rust](https://img.shields.io/badge/rust-stable%201.88-orange)]()
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)]()
 
