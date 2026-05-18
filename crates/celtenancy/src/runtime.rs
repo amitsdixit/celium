@@ -39,8 +39,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use celmesh::host::HostFut;
-use celmesh::{NodeId, RemoteVm, VmHost, VmOp, VmOpReply, VolumeAttachment, VolumeId};
+use celmesh::{Capabilities, NodeId, RemoteVm, VmHost, VmOp, VmOpReply, VolumeAttachment, VolumeId};
 
+use crate::audit::{AuditAction, AuditEvent, AuditSink};
 use crate::{QuotaCharge, TenantId, TenantStore};
 
 /// Per-op error tag used when the inner host rejects an op that we
@@ -59,6 +60,8 @@ const TENANT_ERROR_PREFIX: &str = "tenant:";
 pub struct TenantVmHost {
     /// Tenant whose quota gets charged.
     tenant: TenantId,
+    /// Tenant name cached for audit events (avoids store hit per op).
+    tenant_name: String,
     /// Shared tenant store. The wrapper never holds its lock across
     /// an `.await` on the inner host (see `with_state`).
     store: Arc<dyn TenantStore>,
@@ -69,23 +72,36 @@ pub struct TenantVmHost {
     vm_charges: Mutex<HashMap<u32, QuotaCharge>>,
     /// volume_id → charge accounting, for refund on `DeleteVolume`.
     volume_charges: Mutex<HashMap<VolumeId, QuotaCharge>>,
+    /// Optional audit sink. When `None`, the wrapper is silent.
+    audit: Option<Arc<dyn AuditSink>>,
+    /// User name to stamp on every emitted audit event, if any.
+    audit_user: Option<String>,
 }
 
 impl TenantVmHost {
     /// Build a wrapper around `inner` that charges quota against
-    /// `tenant` in `store`.
+    /// `tenant` in `store`. Looks up the tenant once to cache its
+    /// name for audit events; falls back to the id-as-string if the
+    /// store doesn't know the tenant yet (test-only path).
     #[must_use]
     pub fn new(
         tenant: TenantId,
         store: Arc<dyn TenantStore>,
         inner: Arc<dyn VmHost>,
     ) -> Self {
+        let tenant_name = store
+            .get(tenant)
+            .map(|t| t.name)
+            .unwrap_or_else(|_| format!("tenant#{tenant}"));
         Self {
             tenant,
+            tenant_name,
             store,
             inner,
             vm_charges: Mutex::new(HashMap::new()),
             volume_charges: Mutex::new(HashMap::new()),
+            audit: None,
+            audit_user: None,
         }
     }
 
@@ -93,6 +109,31 @@ impl TenantVmHost {
     #[must_use]
     pub fn tenant(&self) -> TenantId {
         self.tenant
+    }
+
+    /// Attach an audit sink. Every charge / release / denial /
+    /// dispatch outcome will be emitted through it.
+    #[must_use]
+    pub fn with_audit(mut self, sink: Arc<dyn AuditSink>) -> Self {
+        self.audit = Some(sink);
+        self
+    }
+
+    /// Stamp every audit event with this user name.
+    #[must_use]
+    pub fn with_audit_user(mut self, user: impl Into<String>) -> Self {
+        self.audit_user = Some(user.into());
+        self
+    }
+
+    fn emit(&self, ev: AuditEvent) {
+        if let Some(s) = &self.audit {
+            s.record(ev);
+        }
+    }
+
+    fn event_template(&self, action: AuditAction) -> AuditEvent {
+        AuditEvent::now(self.tenant_name.clone(), action).with_user(self.audit_user.clone())
     }
 }
 
@@ -149,15 +190,27 @@ fn lock_vol<'a>(
 impl VmHost for TenantVmHost {
     fn handle<'a>(&'a self, op: VmOp) -> HostFut<'a, Result<VmOpReply, String>> {
         Box::pin(async move {
+            let op_tag = Capabilities::op_tag(&op);
             // 1. Plan the charge (if any) and bill it up-front so a
             //    quota breach short-circuits without ever entering
             //    the inner host.
             let planned = charge_for(&op);
             if let Some(charge) = planned {
                 if charge != QuotaCharge::default() {
-                    self.store
-                        .charge(self.tenant, charge)
-                        .map_err(|e| format!("{TENANT_ERROR_PREFIX} quota: {e}"))?;
+                    if let Err(e) = self.store.charge(self.tenant, charge) {
+                        self.emit(
+                            self.event_template(AuditAction::Deny)
+                                .with_op_tag(op_tag)
+                                .with_charge(charge)
+                                .with_error(format!("quota: {e}")),
+                        );
+                        return Err(format!("{TENANT_ERROR_PREFIX} quota: {e}"));
+                    }
+                    self.emit(
+                        self.event_template(AuditAction::Charge)
+                            .with_op_tag(op_tag)
+                            .with_charge(charge),
+                    );
                 }
             }
 
@@ -187,7 +240,7 @@ impl VmHost for TenantVmHost {
                     lock_vol(&self.volume_charges).insert(volume.id.clone(), c);
                 }
                 // Inner host refused a Create — refund.
-                (Err(_), Some(c)) if c != QuotaCharge::default() => {
+                (Err(err), Some(c)) if c != QuotaCharge::default() => {
                     // Best-effort release. If the store itself fails
                     // here we have nowhere to surface it (the
                     // primary error wins) — log and continue.
@@ -198,6 +251,13 @@ impl VmHost for TenantVmHost {
                             "quota refund failed after inner Create error: {e}",
                         );
                     }
+                    self.emit(
+                        self.event_template(AuditAction::Deny)
+                            .with_op_tag(op_tag)
+                            .with_charge(c)
+                            .with_error(err.clone())
+                            .with_note("refunded"),
+                    );
                 }
                 _ => {}
             }
@@ -212,11 +272,18 @@ impl VmHost for TenantVmHost {
                             vm_id,
                             "quota refund failed after Delete: {e}",
                         );
+                    } else {
+                        self.emit(
+                            self.event_template(AuditAction::Release)
+                                .with_op_tag(op_tag)
+                                .with_charge(charge),
+                        );
                     }
                 }
             }
             if let (Ok(VmOpReply::VolumeDeleted { .. }), Some(vid)) = (&reply, delete_volume_id) {
                 if let Some(charge) = lock_vol(&self.volume_charges).remove(&vid) {
+                    let charge_for_audit = charge;
                     if let Err(e) = self.store.release(self.tenant, charge) {
                         tracing::warn!(
                             target: "celtenancy::runtime",
@@ -224,7 +291,26 @@ impl VmHost for TenantVmHost {
                             volume = %vid,
                             "quota refund failed after DeleteVolume: {e}",
                         );
+                    } else {
+                        self.emit(
+                            self.event_template(AuditAction::Release)
+                                .with_op_tag(op_tag)
+                                .with_charge(charge_for_audit),
+                        );
                     }
+                }
+            }
+
+            // Capability-denied / non-create inner errors that did
+            // not match the refund arm above still deserve a Deny
+            // event so operators can spot rejected ops.
+            if let Err(err) = &reply {
+                if planned.map_or(true, |c| c == QuotaCharge::default()) {
+                    self.emit(
+                        self.event_template(AuditAction::Deny)
+                            .with_op_tag(op_tag)
+                            .with_error(err.clone()),
+                    );
                 }
             }
 

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use celcommon::{CelError, CelResult};
 use celtenancy::{
+    audit::{AuditSink, FileAuditSink},
     exec::{self, ExecOptions},
     FileTenantStore, QuotaCharge, TenantCaps, TenantQuotas, TenantSpec, TenantStore,
 };
@@ -61,6 +62,11 @@ pub enum TenantCmd {
         #[command(subcommand)]
         op: ExecCmd,
     },
+    /// Persistent audit log inspection (W30).
+    Audit {
+        #[command(subcommand)]
+        op: AuditCmd,
+    },
 }
 
 /// `celctl tenant exec <op>` dispatch enum.
@@ -92,6 +98,11 @@ pub struct ExecCommonArgs {
     /// Emit machine-readable JSON instead of a human summary.
     #[arg(long, default_value_t = false)]
     pub json: bool,
+    /// Optional path to a JSON-lines audit log. When set, every
+    /// charge / release / denial / dispatch outcome is appended
+    /// as a single line.
+    #[arg(long)]
+    pub audit_log: Option<PathBuf>,
 }
 
 /// Arguments for `tenant exec vm-create`.
@@ -121,6 +132,37 @@ pub struct ExecVolumeCreateArgs {
     /// Size in bytes.
     #[arg(long)]
     pub size_bytes: u64,
+}
+
+/// `celctl tenant audit <op>` dispatch enum.
+#[derive(Debug, Subcommand)]
+pub enum AuditCmd {
+    /// Show the last N events in the audit log (default 10).
+    Tail(AuditTailArgs),
+    /// Print a one-line summary of the audit log.
+    Stats(AuditStatsArgs),
+}
+
+/// Arguments for `tenant audit tail`.
+#[derive(Debug, Args, Clone)]
+pub struct AuditTailArgs {
+    /// Path to the audit log.
+    #[arg(long)]
+    pub audit_log: PathBuf,
+    /// Number of trailing events to show.
+    #[arg(long, short = 'n', default_value_t = 10)]
+    pub lines: usize,
+    /// Emit JSON instead of one human line per event.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+/// Arguments for `tenant audit stats`.
+#[derive(Debug, Args, Clone)]
+pub struct AuditStatsArgs {
+    /// Path to the audit log.
+    #[arg(long)]
+    pub audit_log: PathBuf,
 }
 
 /// Operations on users inside a tenant.
@@ -330,6 +372,7 @@ pub fn run(cmd: TenantCmd) -> CelResult<()> {
         TenantCmd::User { op } => run_user(op),
         TenantCmd::Quota { op } => run_quota(op),
         TenantCmd::Exec { op } => run_exec(op),
+        TenantCmd::Audit { op } => run_audit(op),
     }
 }
 
@@ -441,9 +484,14 @@ fn run_exec(op: ExecCmd) -> CelResult<()> {
 
 fn dispatch_exec(common: &ExecCommonArgs, op: celmesh::VmOp) -> CelResult<()> {
     let store: Arc<dyn TenantStore> = Arc::new(open(&common.store)?);
+    let sink: Option<Arc<dyn AuditSink>> = match &common.audit_log {
+        Some(p) => Some(Arc::new(FileAuditSink::open(p.clone())?)),
+        None => None,
+    };
     let opts = ExecOptions {
         release_after_create: common.release_after,
         node: None,
+        audit: sink,
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -493,3 +541,60 @@ fn dispatch_exec(common: &ExecCommonArgs, op: celmesh::VmOp) -> CelResult<()> {
     }
     Ok(())
 }
+
+fn run_audit(op: AuditCmd) -> CelResult<()> {
+    match op {
+        AuditCmd::Tail(a) => {
+            let sink = FileAuditSink::open(a.audit_log)?;
+            let events = sink.tail(a.lines)?;
+            if a.json {
+                let json = serde_json::to_string_pretty(&events)
+                    .map_err(|e| CelError::Storage(format!("audit json: {e}")))?;
+                println!("{json}");
+            } else {
+                for ev in events {
+                    println!(
+                        "{} tenant={} user={:?} action={:?} cap={:?} success={} note={:?}",
+                        ev.timestamp_millis,
+                        ev.tenant,
+                        ev.user,
+                        ev.action,
+                        ev.op_capability_tag,
+                        ev.success,
+                        ev.note,
+                    );
+                }
+            }
+            Ok(())
+        }
+        AuditCmd::Stats(a) => {
+            let sink = FileAuditSink::open(a.audit_log)?;
+            let events = sink.read_all()?;
+            let total = events.len();
+            let denied = events.iter().filter(|e| !e.success).count();
+            let charges = events
+                .iter()
+                .filter(|e| matches!(e.action, celtenancy::AuditAction::Charge))
+                .count();
+            let releases = events
+                .iter()
+                .filter(|e| matches!(e.action, celtenancy::AuditAction::Release))
+                .count();
+            let execs = events
+                .iter()
+                .filter(|e| matches!(e.action, celtenancy::AuditAction::Exec))
+                .count();
+            println!(
+                "audit {}: total={} charges={} releases={} execs={} denied={}",
+                sink.path().display(),
+                total,
+                charges,
+                releases,
+                execs,
+                denied,
+            );
+            Ok(())
+        }
+    }
+}
+

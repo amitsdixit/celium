@@ -103,6 +103,7 @@ async fn release_after_create_round_trip_leaves_disk_state_at_baseline() {
     let opts = ExecOptions {
         release_after_create: true,
         node: None,
+        audit: None,
     };
     let audit = exec::exec(
         s.clone(),

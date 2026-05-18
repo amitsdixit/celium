@@ -339,3 +339,96 @@ either a human summary or `--json`-serialized `ExecAudit`.
 * Cluster-wide live-host integration (i.e. dispatching through a
   real running Core-Layer node instead of an ephemeral host)
   remains future work.
+
+---
+
+## W30 — Tenant Audit Sink
+
+> Adds a persistent, structured audit trail for every tenant op.
+> The `AuditSink` trait + `MemAuditSink` / `FileAuditSink`
+> implementations are plumbed into both `TenantVmHost` and
+> `exec::exec`, so charge / release / deny / dispatch outcomes are
+> recorded automatically without changing call sites.
+
+### `celtenancy::audit`
+
+```rust
+pub trait AuditSink: Send + Sync + Debug {
+    fn record(&self, event: AuditEvent); // best-effort, infallible
+}
+
+pub enum AuditAction { Charge, Release, Deny, Exec }
+
+pub struct AuditEvent {
+    pub timestamp_millis:  u64,
+    pub tenant:            String,
+    pub user:              Option<String>,
+    pub action:            AuditAction,
+    pub op_capability_tag: Option<String>,
+    pub charge:            Option<QuotaCharge>,
+    pub success:           bool,
+    pub error:             Option<String>,
+    pub note:              Option<String>,
+}
+```
+
+* `MemAuditSink` — `Vec<AuditEvent>` behind a `Mutex`. Tests and
+  diagnostics use `MemAuditSink::events()` to snapshot history.
+* `FileAuditSink` — append-only JSON-lines on disk. `record` is
+  best-effort (errors logged at `warn`); `read_all`,  `tail(n)`,
+  and `count` parse the log back, silently skipping malformed
+  lines so a crash mid-write cannot poison the history.
+
+### Integration
+
+* `TenantVmHost::with_audit(sink).with_audit_user(name)` builder
+  hooks. Wrapper emits:
+  - `Charge { op_tag, charge }` after a successful pre-bill,
+  - `Deny  { op_tag, charge, error }` on quota exhaustion,
+  - `Deny  { op_tag, charge, error, note="refunded" }` when the
+    inner host rejects a Create and the wrapper refunds,
+  - `Deny  { op_tag, error }` for any other inner-host error
+    (capability-denied reads, malformed ops, etc.),
+  - `Release { op_tag, charge }` after a successful `Delete*`.
+* `ExecOptions { audit: Option<Arc<dyn AuditSink>> }` propagates
+  the sink into the ephemeral wrapper and adds one **terminal**
+  `Exec` event per call summarizing the trip (`note="op=…
+  released=true reply=…"`).
+
+### CLI
+
+```text
+celctl tenant exec vm-create     ... [--audit-log PATH]
+celctl tenant exec volume-create ... [--audit-log PATH]
+celctl tenant audit tail  --audit-log PATH [-n N] [--json]
+celctl tenant audit stats --audit-log PATH
+```
+
+`tail` prints a fixed-format line per event (or `--json` for
+pretty-printed `Vec<AuditEvent>`). `stats` returns one line:
+`total / charges / releases / execs / denied`.
+
+### Test coverage
+
+* `crates/celtenancy/src/audit.rs` — 7 unit tests
+  (event builder, mem sink, file sink round-trip, reopen+append,
+  tail-n, malformed-line tolerance).
+* `crates/celtenancy/src/exec.rs` — 3 additional unit tests for
+  the sink integration (Charge+Exec on success, Deny+Exec on
+  quota exhaustion, Charge+Release(dry-run)+Exec on
+  `release_after_create`).
+* `crates/celtest/tests/tenant_audit_e2e.rs` — 2 e2e tests
+  proving FileAuditSink history survives multiple process
+  restarts and records dry-run releases correctly.
+
+### Limitations
+
+* The sink is **process-local** — there is no cluster-wide audit
+  bus or remote shipping. Operators are expected to point each
+  node's `--audit-log` at a tail-collected file (Vector, Fluent
+  Bit, …) if they want fan-in.
+* Recording is best-effort by design. A blown disk does not fail
+  a tenant op; you'll see `warn!` lines instead.
+* `ExecOptions` no longer derives `Serialize` / `Deserialize`
+  because it now holds an `Arc<dyn AuditSink>`. The output
+  `ExecAudit` shape is unchanged and remains fully serializable.

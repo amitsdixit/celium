@@ -25,12 +25,11 @@ use celmesh::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    QuotaCharge, QuotaUsage, Tenant, TenantStore, TenantVmHost,
-};
+use crate::audit::{AuditAction, AuditEvent, AuditSink};
+use crate::{QuotaCharge, QuotaUsage, Tenant, TenantStore, TenantVmHost};
 
 /// Options controlling [`exec`]'s side effects.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default)]
 pub struct ExecOptions {
     /// When `true` and the dispatched op is a successful
     /// `Create` / `CreateVolume`, immediately release the charge
@@ -40,6 +39,24 @@ pub struct ExecOptions {
     /// Node label used to prime the ephemeral host. Defaults to
     /// `"tenant-exec"` when `None`.
     pub node: Option<String>,
+    /// Optional audit sink. Receives:
+    ///   * one `Charge` event from the inner [`TenantVmHost`] on
+    ///     successful charge,
+    ///   * one `Deny` event on quota exhaustion or inner-host error,
+    ///   * one `Release` event when [`Self::release_after_create`]
+    ///     refunds a successful `Create*`,
+    ///   * one terminal `Exec` event summarizing the whole trip.
+    pub audit: Option<Arc<dyn AuditSink>>,
+}
+
+impl std::fmt::Debug for ExecOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecOptions")
+            .field("release_after_create", &self.release_after_create)
+            .field("node", &self.node)
+            .field("audit", &self.audit.as_ref().map(|_| "<sink>"))
+            .finish()
+    }
 }
 
 /// Structured record of a single [`exec`] call.
@@ -204,7 +221,13 @@ pub async fn exec(
         )
         .with_caps(caps),
     );
-    let host = TenantVmHost::new(tenant_id, store.clone(), inner);
+    let mut host = TenantVmHost::new(tenant_id, store.clone(), inner);
+    if let Some(sink) = opts.audit.clone() {
+        host = host.with_audit(sink);
+        if let Some(u) = user_name {
+            host = host.with_audit_user(u.to_string());
+        }
+    }
     let node_label = opts.node.clone().unwrap_or_else(|| "tenant-exec".to_string());
     let node = NodeId::from(node_label.as_str());
     // MemVmHost mints ids relative to the owning node and refuses
@@ -227,20 +250,58 @@ pub async fn exec(
     // Optional dry-run refund — only relevant on a successful
     // Create*. If the inner host refunded already (failure path),
     // there's nothing to do.
+    let mut released_after_create = false;
     if opts.release_after_create && dispatch_succeeded {
         if let Some(c) = planned_charge {
             if c != QuotaCharge::default() {
                 // Best-effort: surface the error in the audit but
                 // don't bubble — the user's primary op already
                 // succeeded.
-                if let Err(e) = store.release(tenant_id, c) {
-                    tracing::warn!("tenancy.exec: release after dry-run failed: {e:?}");
+                match store.release(tenant_id, c) {
+                    Ok(_usage) => {
+                        released_after_create = true;
+                        if let Some(sink) = &opts.audit {
+                            sink.record(
+                                AuditEvent::now(tenant.name.clone(), AuditAction::Release)
+                                    .with_user(user_name.map(str::to_owned))
+                                    .with_op_tag(op_tag)
+                                    .with_charge(c)
+                                    .with_note("dry-run"),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("tenancy.exec: release after dry-run failed: {e:?}");
+                    }
                 }
             }
         }
     }
 
     let usage_after = store.get(tenant_id)?.usage;
+
+    // Terminal Exec event with the full audit shape.
+    if let Some(sink) = &opts.audit {
+        let mut ev = AuditEvent::now(tenant.name.clone(), AuditAction::Exec)
+            .with_user(user_name.map(str::to_owned))
+            .with_op_tag(op_tag);
+        if let Some(c) = planned_charge {
+            ev = ev.with_charge(c);
+        }
+        if let Some(err) = &error {
+            ev = ev.with_error(err.clone());
+        }
+        let mut note = format!("op={op_kind}");
+        if released_after_create {
+            note.push_str(" released=true");
+        }
+        if let Some(r) = &reply {
+            note.push_str(" reply=");
+            note.push_str(r);
+        }
+        ev = ev.with_note(note);
+        sink.record(ev);
+    }
 
     Ok(ExecAudit {
         tenant: tenant.name,
@@ -397,5 +458,93 @@ mod tests {
         assert!(audit.ok());
         assert_eq!(audit.usage_after.storage_bytes, 4096);
         assert_eq!(audit.op_capability_tag, "vol.create");
+    }
+
+    #[tokio::test]
+    async fn audit_sink_records_charge_and_exec_on_success() {
+        let (store, name) = fixture(TenantCaps::ALL);
+        let sink = Arc::new(crate::audit::MemAuditSink::new());
+        let opts = ExecOptions {
+            audit: Some(sink.clone() as Arc<dyn AuditSink>),
+            ..ExecOptions::default()
+        };
+        let audit = exec(
+            store.clone(),
+            &name,
+            None,
+            vm_create_op("web", 2, 1024),
+            opts,
+        )
+        .await
+        .unwrap();
+        assert!(audit.ok());
+        let events = sink.events();
+        // 1 Charge (from TenantVmHost) + 1 Exec (terminal).
+        assert_eq!(events.len(), 2, "events: {events:?}");
+        assert_eq!(events[0].action, AuditAction::Charge);
+        assert_eq!(events[0].op_capability_tag.as_deref(), Some("vm.create"));
+        assert_eq!(events[1].action, AuditAction::Exec);
+        assert!(events[1].success);
+    }
+
+    #[tokio::test]
+    async fn audit_sink_records_deny_on_quota_exhaustion() {
+        let (store, name) = fixture(TenantCaps::ALL);
+        let sink = Arc::new(crate::audit::MemAuditSink::new());
+        let opts = ExecOptions {
+            audit: Some(sink.clone() as Arc<dyn AuditSink>),
+            ..ExecOptions::default()
+        };
+        let audit = exec(
+            store.clone(),
+            &name,
+            None,
+            vm_create_op("big", 5, 1024),
+            opts,
+        )
+        .await
+        .unwrap();
+        assert!(!audit.ok());
+        let events = sink.events();
+        // 1 Deny (quota) + 1 Exec (failed). No Charge because the
+        // wrapper short-circuited before billing.
+        assert_eq!(events.len(), 2, "events: {events:?}");
+        assert_eq!(events[0].action, AuditAction::Deny);
+        assert!(events[0].error.as_deref().unwrap().contains("quota"));
+        assert_eq!(events[1].action, AuditAction::Exec);
+        assert!(!events[1].success);
+    }
+
+    #[tokio::test]
+    async fn audit_sink_records_dry_run_release_note() {
+        let (store, name) = fixture(TenantCaps::ALL);
+        let sink = Arc::new(crate::audit::MemAuditSink::new());
+        let opts = ExecOptions {
+            release_after_create: true,
+            audit: Some(sink.clone() as Arc<dyn AuditSink>),
+            ..ExecOptions::default()
+        };
+        let audit = exec(
+            store.clone(),
+            &name,
+            None,
+            vm_create_op("web", 1, 256),
+            opts,
+        )
+        .await
+        .unwrap();
+        assert!(audit.ok());
+        let events = sink.events();
+        // Charge + Release(dry-run) + Exec.
+        assert_eq!(events.len(), 3, "events: {events:?}");
+        assert_eq!(events[0].action, AuditAction::Charge);
+        assert_eq!(events[1].action, AuditAction::Release);
+        assert_eq!(events[1].note.as_deref(), Some("dry-run"));
+        assert_eq!(events[2].action, AuditAction::Exec);
+        assert!(events[2]
+            .note
+            .as_deref()
+            .unwrap()
+            .contains("released=true"));
     }
 }
