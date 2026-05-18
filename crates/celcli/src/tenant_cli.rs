@@ -16,10 +16,12 @@ use std::sync::Arc;
 use celcommon::{CelError, CelResult};
 use celtenancy::{
     audit::{AuditSink, FileAuditSink},
+    auth::SessionToken,
     exec::{self, ExecOptions},
     FileTenantStore, QuotaCharge, TenantCaps, TenantQuotas, TenantSpec, TenantStore,
 };
 use clap::{Args, Subcommand};
+use serde::{Deserialize, Serialize};
 
 /// `celctl tenant <op>` dispatch enum.
 #[derive(Debug, Subcommand)]
@@ -74,6 +76,12 @@ pub enum TenantCmd {
     },
     /// Print the tenant tree rooted at every top-level tenant (W31).
     Tree(StoreArgs),
+    /// Authenticate and mint a session token (W32).
+    Login(LoginArgs),
+    /// Revoke the active session token (W32).
+    Logout(LogoutArgs),
+    /// Print the identity of the active session token (W32).
+    Whoami(WhoamiArgs),
 }
 
 /// `celctl tenant subtenant <op>` dispatch enum.
@@ -234,6 +242,8 @@ pub enum UserCmd {
     },
     /// Remove a user by name.
     Remove(UserRemoveArgs),
+    /// Set (or clear) a user's password (W32).
+    SetPassword(UserSetPasswordArgs),
 }
 
 /// Operations on quotas.
@@ -317,6 +327,89 @@ pub struct UserRemoveArgs {
     /// User name.
     #[arg(long)]
     pub name: String,
+}
+
+/// Arguments for `tenant user set-password` (W32).
+///
+/// The plaintext password is read from the `CELIUM_PASSWORD`
+/// environment variable. It is **never** accepted on the
+/// command-line so it cannot leak into shell history, /proc, or
+/// process listings.
+#[derive(Debug, Args, Clone)]
+pub struct UserSetPasswordArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Tenant name.
+    #[arg(long)]
+    pub tenant: String,
+    /// User name.
+    #[arg(long)]
+    pub name: String,
+}
+
+/// Arguments for `tenant login` (W32). Reads the password from
+/// `$CELIUM_PASSWORD` only.
+#[derive(Debug, Args, Clone)]
+pub struct LoginArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Tenant name.
+    #[arg(long)]
+    pub tenant: String,
+    /// User name.
+    #[arg(long)]
+    pub user: String,
+    /// Token lifetime in seconds. Defaults to
+    /// [`celtenancy::DEFAULT_SESSION_TTL_SECS`] (12 h).
+    #[arg(long)]
+    pub ttl_secs: Option<u64>,
+    /// Where to write the session JSON. Defaults to
+    /// `~/.celium/session.json`.
+    #[arg(long)]
+    pub session_file: Option<PathBuf>,
+    /// Emit machine-readable JSON instead of a one-line summary.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+/// Arguments for `tenant logout`.
+#[derive(Debug, Args, Clone)]
+pub struct LogoutArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Session file to read the token from (default
+    /// `~/.celium/session.json`). The file is deleted on success.
+    #[arg(long)]
+    pub session_file: Option<PathBuf>,
+}
+
+/// Arguments for `tenant whoami`.
+#[derive(Debug, Args, Clone)]
+pub struct WhoamiArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Session file to read the token from.
+    #[arg(long)]
+    pub session_file: Option<PathBuf>,
+    /// Emit JSON instead of a one-line summary.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+/// On-disk session file format. Mirrors [`celtenancy::Session`]
+/// minus the SHA-256 hash (the plaintext token is what the
+/// holder actually needs).
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionFile {
+    /// Plaintext 64-char hex token.
+    token: String,
+    /// Tenant name (for display only — the store does the
+    /// authoritative lookup at `validate_token` time).
+    tenant: String,
+    /// User name (display).
+    user: String,
+    /// Expiry as Unix-epoch milliseconds (display).
+    expires_ms: u64,
 }
 
 /// Arguments for `tenant quota charge` / `release`.
@@ -429,6 +522,9 @@ pub fn run(cmd: TenantCmd) -> CelResult<()> {
         TenantCmd::Audit { op } => run_audit(op),
         TenantCmd::Subtenant { op } => run_subtenant(op),
         TenantCmd::Tree(s) => run_tree(&s),
+        TenantCmd::Login(a) => run_login(a),
+        TenantCmd::Logout(a) => run_logout(a),
+        TenantCmd::Whoami(a) => run_whoami(a),
     }
 }
 
@@ -468,6 +564,20 @@ fn run_user(op: UserCmd) -> CelResult<()> {
                 .ok_or(CelError::Invalid("user name unknown"))?;
             s.remove_user(t.id, uid)?;
             println!("removed {} from {}", a.name, t.name);
+            Ok(())
+        }
+        UserCmd::SetPassword(a) => {
+            let s = open(&a.store)?;
+            let t = s.get_by_name(&a.tenant)?;
+            let uid = t
+                .users
+                .iter()
+                .find(|u| u.name == a.name)
+                .map(|u| u.id)
+                .ok_or(CelError::Invalid("user name unknown"))?;
+            let plain = read_password_from_env()?;
+            s.set_password(t.id, uid, &plain)?;
+            println!("password set for {} in {}", a.name, t.name);
             Ok(())
         }
     }
@@ -737,6 +847,141 @@ fn run_tree(args: &StoreArgs) -> CelResult<()> {
         for r in roots {
             print_subtree(r, 0, &by_parent);
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// W32 — authentication & sessions
+// ---------------------------------------------------------------------------
+
+/// Read the plaintext password from `$CELIUM_PASSWORD`. We
+/// deliberately refuse argv / file fallbacks so the secret has a
+/// single, well-known ingestion point that operators can audit.
+fn read_password_from_env() -> CelResult<String> {
+    let v = std::env::var("CELIUM_PASSWORD")
+        .map_err(|_| CelError::Invalid("CELIUM_PASSWORD is unset"))?;
+    if v.is_empty() {
+        return Err(CelError::Invalid("CELIUM_PASSWORD is empty"));
+    }
+    Ok(v)
+}
+
+/// Resolve the on-disk session-file path. Honors `$CELIUM_SESSION`
+/// when set, otherwise falls back to `~/.celium/session.json` (or
+/// `./.celium/session.json` if the home dir cannot be located —
+/// common in CI sandboxes).
+fn resolve_session_path(arg: Option<PathBuf>) -> CelResult<PathBuf> {
+    if let Some(p) = arg {
+        return Ok(p);
+    }
+    if let Ok(p) = std::env::var("CELIUM_SESSION") {
+        return Ok(PathBuf::from(p));
+    }
+    let home = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    Ok(home.join(".celium").join("session.json"))
+}
+
+fn write_session_file(path: &std::path::Path, sf: &SessionFile) -> CelResult<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CelError::Io(format!("create {}: {e}", parent.display())))?;
+    }
+    let json = serde_json::to_string_pretty(sf)
+        .map_err(|e| CelError::Storage(format!("session json: {e}")))?;
+    std::fs::write(path, json)
+        .map_err(|e| CelError::Io(format!("write {}: {e}", path.display())))?;
+    Ok(())
+}
+
+fn read_session_file(path: &std::path::Path) -> CelResult<SessionFile> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| CelError::Io(format!("read {}: {e}", path.display())))?;
+    serde_json::from_slice::<SessionFile>(&bytes)
+        .map_err(|e| CelError::Storage(format!("session parse: {e}")))
+}
+
+fn run_login(a: LoginArgs) -> CelResult<()> {
+    let plain = read_password_from_env()?;
+    let s = open(&a.store)?;
+    let (tid, uid, caps) = s.authenticate(&a.tenant, &a.user, &plain)?;
+    // Mint a session asking for everything the user has — the
+    // store intersects requested with the user's caps, so this
+    // gives the holder full user authority for the session.
+    let (token, session) = s.create_session(tid, uid, caps, a.ttl_secs)?;
+    let sf = SessionFile {
+        token: token.as_str().to_string(),
+        tenant: a.tenant.clone(),
+        user: a.user.clone(),
+        expires_ms: session.expires_ms,
+    };
+    let path = resolve_session_path(a.session_file)?;
+    write_session_file(&path, &sf)?;
+    if a.json {
+        let json = serde_json::to_string_pretty(&sf)
+            .map_err(|e| CelError::Storage(format!("session json: {e}")))?;
+        println!("{json}");
+    } else {
+        println!(
+            "login ok: tenant={} user={} caps={} ttl_ms={} session_file={}",
+            sf.tenant,
+            sf.user,
+            session.caps.to_tags(),
+            session.expires_ms.saturating_sub(session.created_ms),
+            path.display(),
+        );
+    }
+    Ok(())
+}
+
+fn run_logout(a: LogoutArgs) -> CelResult<()> {
+    let path = resolve_session_path(a.session_file)?;
+    if !path.exists() {
+        println!("no active session at {}", path.display());
+        return Ok(());
+    }
+    let sf = read_session_file(&path)?;
+    let token = SessionToken::from_hex(&sf.token)?;
+    let s = open(&a.store)?;
+    // Always best-effort: revoke is idempotent, file removal is
+    // unconditional.
+    let _ = s.revoke_token(&token);
+    std::fs::remove_file(&path)
+        .map_err(|e| CelError::Io(format!("remove {}: {e}", path.display())))?;
+    println!("logout ok: {} removed", path.display());
+    Ok(())
+}
+
+fn run_whoami(a: WhoamiArgs) -> CelResult<()> {
+    let path = resolve_session_path(a.session_file)?;
+    let sf = read_session_file(&path)?;
+    let token = SessionToken::from_hex(&sf.token)?;
+    let s = open(&a.store)?;
+    let session = s.validate_token(&token)?;
+    if a.json {
+        // Build a redacted view; never echo the raw token.
+        let view = serde_json::json!({
+            "tenant_id": session.tenant.raw(),
+            "tenant": sf.tenant,
+            "user_id": session.user.0,
+            "user": session.user_name,
+            "caps": session.caps.to_tags(),
+            "created_ms": session.created_ms,
+            "expires_ms": session.expires_ms,
+        });
+        println!("{}", serde_json::to_string_pretty(&view).unwrap_or_default());
+    } else {
+        println!(
+            "tenant={} user={} caps={} expires_ms={}",
+            sf.tenant,
+            session.user_name,
+            session.caps.to_tags(),
+            session.expires_ms,
+        );
     }
     Ok(())
 }

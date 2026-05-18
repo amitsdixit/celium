@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::auth::PasswordHashStr;
 use crate::caps::TenantCaps;
 
 /// Opaque per-tenant user identifier. Allocated monotonically by
@@ -38,4 +39,10 @@ pub struct User {
     pub name: String,
     /// Attenuated capability set.
     pub caps: TenantCaps,
+    /// Optional Argon2id PHC password hash (W32). `None` means the
+    /// user has no password set yet and cannot log in via
+    /// [`crate::TenantStore::authenticate`]. `#[serde(default)]`
+    /// keeps W27..W31 store files reopenable unchanged.
+    #[serde(default)]
+    pub password_hash: Option<PasswordHashStr>,
 }

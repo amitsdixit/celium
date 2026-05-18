@@ -567,3 +567,101 @@ celctl tenant tree
   best-effort sharing.
 
 ---
+## W32 — User Authentication & Sessions
+
+W32 adds password-backed login and short-lived session tokens to
+the Tenancy Layer. The Core Layer (CelHyper / CelMesh / CelVault)
+is untouched: every credential operation lives inside
+`celtenancy::auth` and `celtenancy::store`.
+
+### Threat model
+
+* **Plaintext passwords never reach disk.** They are hashed with
+  Argon2id (default parameters: m_cost=19456, t_cost=2, p_cost=1)
+  the moment they enter the store and persisted only as a PHC
+  string (e.g. `$argon2id$v=19$m=19456,t=2,p=1$...`).
+* **Session tokens never reach disk.** A token is 32 bytes of
+  CSPRNG output rendered as 64 lowercase hex chars. Only its
+  SHA-256 fingerprint (`TokenHash`) is persisted; the plaintext
+  is returned to the caller exactly once at mint time.
+* **Uniform errors.** Every credential-related failure path —
+  unknown tenant, unknown user, no password set, wrong password —
+  returns the same `CelError::CapabilityDenied("auth.credentials")`.
+  Every token-related failure — unknown, expired, revoked —
+  returns the same `CelError::CapabilityDenied("auth.session")`.
+  Operators reading logs see a single tag per failure class; an
+  attacker probing for valid usernames learns nothing.
+* **Passwords are never accepted on argv.** The `celctl` surface
+  reads them only from `$CELIUM_PASSWORD`, so they cannot leak
+  into shell history, /proc, or process listings.
+
+### Surface
+
+`celtenancy::auth` exposes:
+
+| Item | Purpose |
+| --- | --- |
+| `PasswordHashStr` | Newtype around the Argon2id PHC string. |
+| `hash_password(plain)` / `verify_password(plain, &hash)` | Bidirectional primitives. Empty plaintext is rejected as `Invalid`. |
+| `SessionToken` / `TokenHash` | Plaintext + fingerprint pair. |
+| `mint_token()` | CSPRNG → `(SessionToken, TokenHash)`. |
+| `hash_token(&SessionToken) -> TokenHash` | Deterministic SHA-256 of the hex string. |
+| `Session` | `{ token_hash, tenant, user, user_name, caps, created_ms, expires_ms }`. |
+| `DEFAULT_SESSION_TTL_SECS` | 12 hours. |
+
+`TenantStore` gains six methods, all overridden by
+`MemTenantStore` and `FileTenantStore`:
+
+* `set_password(tenant, user, plain)` — write the Argon2id hash.
+* `authenticate(tenant_name, user_name, password)` — uniform
+  failure ⇒ `auth.credentials`; success ⇒ `(TenantId, UserId,
+  TenantCaps)`.
+* `create_session(tenant, user, requested_caps, ttl_secs)` —
+  intersects `requested_caps` with the user's caps, mints a
+  token, returns `(SessionToken, Session)`.
+* `validate_token(token)` — uniform failure ⇒ `auth.session`.
+* `revoke_token(token)` — idempotent.
+* `purge_expired_sessions()` — periodic-cleanup helper.
+
+On-disk, `StoreState.sessions` is a `Vec<Session>` carrying only
+the `TokenHash`. The field is `#[serde(default)]` so any
+pre-W32 `tenants.json` reopens unchanged.
+
+### CLI
+
+```
+celctl tenant user set-password --tenant <t> --name <u>
+celctl tenant login             --tenant <t> --user <u> [--ttl-secs N] [--session-file PATH] [--json]
+celctl tenant logout            [--session-file PATH]
+celctl tenant whoami            [--session-file PATH] [--json]
+```
+
+`login` writes a JSON envelope to `$CELIUM_SESSION` (or
+`~/.celium/session.json`) carrying `{ token, tenant, user,
+expires_ms }`. `logout` revokes the token via the store and
+deletes the file. `whoami` re-validates against the store.
+
+### Tests
+
+* Unit (`celtenancy`): 10 new tests covering hash round-trip,
+  token format, expiry math, store-level auth + session
+  persistence, and a "plaintext password never written to JSON"
+  invariant.
+* E2E (`celtest::tenant_auth_e2e`): 8 tests including
+  uniform-error checks, expired/revoked token rejection,
+  session persistence across process restart, and grep-assertions
+  that neither the password nor the plaintext token appear in
+  `tenants.json`.
+
+### Limitations
+
+* Stdin/TTY password ingestion is **not** wired — operators must
+  set `$CELIUM_PASSWORD` (helpful when scripting; rougher for
+  interactive use). A future iteration can layer a `rpassword`-
+  style prompt behind a `--prompt` flag.
+* No password clear / rotate verb yet. To rotate, run
+  `tenant user set-password` again with a new
+  `$CELIUM_PASSWORD`; to disable login for a user, remove the
+  user (`tenant user remove`).
+
+---

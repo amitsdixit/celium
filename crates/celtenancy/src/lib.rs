@@ -39,9 +39,14 @@ mod tenant;
 mod user;
 
 pub mod audit;
+pub mod auth;
 pub mod exec;
 
 pub use audit::{AuditAction, AuditEvent, AuditSink, FileAuditSink, MemAuditSink};
+pub use auth::{
+    hash_password, hash_token, mint_token, now_ms, verify_password, PasswordHashStr, Session,
+    SessionToken, TokenHash, DEFAULT_SESSION_TTL_SECS, TOKEN_BYTES, TOKEN_HEX_LEN,
+};
 pub use caps::{attenuate, TenantCaps};
 pub use namespace::TenantNamespace;
 pub use quota::{charge_quota, release_quota, QuotaCharge, QuotaUsage, TenantQuotas};

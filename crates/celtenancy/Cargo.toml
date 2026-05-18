@@ -26,6 +26,11 @@ tracing     = { workspace = true }
 clap        = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# W32 — auth & sessions
+argon2      = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+rand        = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+sha2        = { version = "0.10", default-features = false }
+
 [dev-dependencies]
 tokio    = { workspace = true }
 tempfile = "3"

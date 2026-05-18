@@ -11,6 +11,10 @@ use std::sync::Mutex;
 use celcommon::{CelError, CelResult};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::{
+    hash_password, hash_token, mint_token, now_ms, verify_password, Session, SessionToken,
+    DEFAULT_SESSION_TTL_SECS,
+};
 use crate::caps::{attenuate, TenantCaps};
 use crate::namespace::{validate_segment, TenantNamespace};
 use crate::quota::{charge_quota, release_quota, QuotaCharge, QuotaUsage};
@@ -165,6 +169,104 @@ pub trait TenantStore: Send + Sync {
         }
         Ok(out)
     }
+
+    // -----------------------------------------------------------
+    // W32 — authentication & sessions
+    //
+    // Default impls return `CelError::Internal` so any third-party
+    // `TenantStore` written against W27..W31 keeps compiling but
+    // surfaces a clear error when auth is invoked. The two
+    // first-party stores (`MemTenantStore`, `FileTenantStore`)
+    // override every method below.
+    // -----------------------------------------------------------
+
+    /// Set or replace the Argon2id password hash for `user`.
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on unknown tenant / user / empty password.
+    /// * [`CelError::Storage`] when the persistence layer fails.
+    fn set_password(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _plain: &str,
+    ) -> CelResult<()> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Verify `(tenant_name, user_name, password)` and return the
+    /// authenticated user's caps. All failure paths surface the
+    /// uniform error `CelError::CapabilityDenied("auth.credentials")`.
+    ///
+    /// # Errors
+    ///
+    /// See above.
+    fn authenticate(
+        &self,
+        _tenant_name: &str,
+        _user_name: &str,
+        _password: &str,
+    ) -> CelResult<(TenantId, UserId, TenantCaps)> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Mint a fresh session for `(tenant, user)` with `requested_caps`
+    /// **intersected** with the user's caps. `ttl_secs` defaults to
+    /// [`crate::auth::DEFAULT_SESSION_TTL_SECS`].
+    ///
+    /// Returns the **plaintext token** (the caller must persist /
+    /// transmit it; the store only keeps its SHA-256 hash) and the
+    /// resulting [`Session`] record.
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on unknown tenant or user.
+    /// * [`CelError::Storage`] when the persistence layer fails.
+    fn create_session(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+        _requested_caps: TenantCaps,
+        _ttl_secs: Option<u64>,
+    ) -> CelResult<(SessionToken, Session)> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Look up a token's session record, rejecting expired or
+    /// unknown tokens with the uniform error
+    /// `CelError::CapabilityDenied("auth.session")`.
+    ///
+    /// # Errors
+    ///
+    /// See above.
+    fn validate_token(&self, _token: &SessionToken) -> CelResult<Session> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Revoke a token. Idempotent: revoking an unknown / already-
+    /// revoked token is `Ok(())`. The uniform return value
+    /// prevents an attacker from probing which tokens were ever
+    /// valid.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces [`CelError::Storage`] when the persistence layer fails.
+    fn revoke_token(&self, _token: &SessionToken) -> CelResult<()> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Drop every session whose `expires_ms` is in the past.
+    /// Returns the number purged. Useful from a periodic cleanup
+    /// task; not required for correctness because
+    /// [`Self::validate_token`] already rejects expired entries.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces [`CelError::Storage`] when the persistence layer fails.
+    fn purge_expired_sessions(&self) -> CelResult<usize> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +279,14 @@ struct StoreState {
     next_user_id: u64,
     tenants: HashMap<u64, Tenant>,
     by_name: HashMap<String, u64>,
+    /// W32 — live sessions. Plaintext tokens are never persisted;
+    /// each entry carries only the SHA-256 fingerprint. Lookup is
+    /// O(n) in the session count, which is fine for the operator
+    /// scale we target (tens to low-hundreds of live sessions per
+    /// store). `#[serde(default)]` keeps pre-W32 JSON files
+    /// reopenable unchanged.
+    #[serde(default)]
+    sessions: Vec<Session>,
 }
 
 impl StoreState {
@@ -285,6 +395,7 @@ impl StoreState {
             id: UserId(id_raw),
             name: user_name,
             caps,
+            password_hash: None,
         };
         t.users.push(user.clone());
         Ok(user)
@@ -376,6 +487,142 @@ impl StoreState {
         }
         Ok(out)
     }
+
+    // -----------------------------------------------------------
+    // W32 — authentication & sessions
+    // -----------------------------------------------------------
+
+    fn set_password(
+        &mut self,
+        tenant: TenantId,
+        user: UserId,
+        plain: &str,
+    ) -> CelResult<()> {
+        let hash = hash_password(plain)?;
+        let t = self
+            .tenants
+            .get_mut(&tenant.0)
+            .ok_or(CelError::Invalid("tenant id unknown"))?;
+        let u = t
+            .users
+            .iter_mut()
+            .find(|u| u.id == user)
+            .ok_or(CelError::Invalid("user id unknown"))?;
+        u.password_hash = Some(hash);
+        Ok(())
+    }
+
+    /// Verify `(tenant_name, user_name, password)`. On any failure
+    /// — unknown tenant, unknown user, no password set, or hash
+    /// mismatch — returns the **same** error
+    /// `CelError::CapabilityDenied("auth.credentials")` so the
+    /// caller cannot distinguish them via a side channel.
+    fn authenticate(
+        &self,
+        tenant_name: &str,
+        user_name: &str,
+        password: &str,
+    ) -> CelResult<(TenantId, UserId, TenantCaps)> {
+        // Uniform-error helper. Constructed per branch (no Clone
+        // on CelError) so we don't accidentally pre-allocate.
+        let denied = || CelError::CapabilityDenied("auth.credentials");
+        let tid = self
+            .by_name
+            .get(tenant_name)
+            .copied()
+            .ok_or_else(denied)?;
+        let t = self.tenants.get(&tid).ok_or_else(denied)?;
+        let u = t
+            .users
+            .iter()
+            .find(|u| u.name == user_name)
+            .ok_or_else(denied)?;
+        let hash = u.password_hash.as_ref().ok_or_else(denied)?;
+        verify_password(password, hash).map_err(|_| denied())?;
+        Ok((TenantId(tid), u.id, u.caps))
+    }
+
+    fn create_session(
+        &mut self,
+        tenant: TenantId,
+        user: UserId,
+        requested_caps: TenantCaps,
+        ttl_secs: Option<u64>,
+    ) -> CelResult<(SessionToken, Session)> {
+        // Resolve user + cache its name for the session record.
+        let t = self
+            .tenants
+            .get(&tenant.0)
+            .ok_or(CelError::Invalid("tenant id unknown"))?;
+        let u = t
+            .users
+            .iter()
+            .find(|u| u.id == user)
+            .ok_or(CelError::Invalid("user id unknown"))?;
+        // Clamp requested caps to the user's caps. Unlike
+        // `attenuate()` (which is strict and rejects on overflow),
+        // session minting silently intersects: the caller gets
+        // what they asked for, capped by what the user actually
+        // has. This mirrors the semantics of POSIX-style token
+        // scope reduction and keeps the CLI friendly (`login`
+        // doesn't need to know the user's exact caps).
+        let caps = TenantCaps::from_bits_truncate(u.caps.bits() & requested_caps.bits());
+        let user_name = u.name.clone();
+        let (token, token_hash) = mint_token();
+        let created_ms = now_ms();
+        let ttl_ms = ttl_secs
+            .unwrap_or(DEFAULT_SESSION_TTL_SECS)
+            .saturating_mul(1_000);
+        let expires_ms = created_ms.saturating_add(ttl_ms);
+        let session = Session {
+            token_hash,
+            tenant,
+            user,
+            user_name,
+            caps,
+            created_ms,
+            expires_ms,
+        };
+        // Defensive: drop any prior session that happens to share
+        // the same hash (collision probability ~2^-256, but the
+        // check is free and keeps the invariant tight).
+        self.sessions.retain(|s| s.token_hash != token_hash);
+        self.sessions.push(session.clone());
+        Ok((token, session))
+    }
+
+    fn validate_token(&self, token: &SessionToken) -> CelResult<Session> {
+        let needle = hash_token(token);
+        let now = now_ms();
+        let s = self
+            .sessions
+            .iter()
+            .find(|s| s.token_hash == needle)
+            .ok_or(CelError::CapabilityDenied("auth.session"))?;
+        if s.is_expired_at(now) {
+            return Err(CelError::CapabilityDenied("auth.session"));
+        }
+        Ok(s.clone())
+    }
+
+    fn revoke_token(&mut self, token: &SessionToken) -> CelResult<()> {
+        let needle = hash_token(token);
+        let before = self.sessions.len();
+        self.sessions.retain(|s| s.token_hash != needle);
+        if self.sessions.len() == before {
+            // Idempotent on already-revoked / never-existed tokens
+            // so logout never reveals which is which.
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    fn purge_expired_sessions(&mut self) -> usize {
+        let now = now_ms();
+        let before = self.sessions.len();
+        self.sessions.retain(|s| !s.is_expired_at(now));
+        before - self.sessions.len()
+    }
 }
 
 /// In-memory [`TenantStore`]. Used by integration tests and the
@@ -460,6 +707,46 @@ impl TenantStore for MemTenantStore {
 
     fn release(&self, tenant: TenantId, charge: QuotaCharge) -> CelResult<QuotaUsage> {
         self.with_state(|s| s.release(tenant, charge))
+    }
+
+    fn set_password(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        plain: &str,
+    ) -> CelResult<()> {
+        self.with_state(|s| s.set_password(tenant, user, plain))
+    }
+
+    fn authenticate(
+        &self,
+        tenant_name: &str,
+        user_name: &str,
+        password: &str,
+    ) -> CelResult<(TenantId, UserId, TenantCaps)> {
+        self.with_state(|s| s.authenticate(tenant_name, user_name, password))
+    }
+
+    fn create_session(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        requested_caps: TenantCaps,
+        ttl_secs: Option<u64>,
+    ) -> CelResult<(SessionToken, Session)> {
+        self.with_state(|s| s.create_session(tenant, user, requested_caps, ttl_secs))
+    }
+
+    fn validate_token(&self, token: &SessionToken) -> CelResult<Session> {
+        self.with_state(|s| s.validate_token(token))
+    }
+
+    fn revoke_token(&self, token: &SessionToken) -> CelResult<()> {
+        self.with_state(|s| s.revoke_token(token))
+    }
+
+    fn purge_expired_sessions(&self) -> CelResult<usize> {
+        self.with_state(|s| Ok(s.purge_expired_sessions()))
     }
 }
 
@@ -626,6 +913,46 @@ impl TenantStore for FileTenantStore {
 
     fn release(&self, tenant: TenantId, charge: QuotaCharge) -> CelResult<QuotaUsage> {
         self.with_state(|s| s.release(tenant, charge))
+    }
+
+    fn set_password(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        plain: &str,
+    ) -> CelResult<()> {
+        self.with_state(|s| s.set_password(tenant, user, plain))
+    }
+
+    fn authenticate(
+        &self,
+        tenant_name: &str,
+        user_name: &str,
+        password: &str,
+    ) -> CelResult<(TenantId, UserId, TenantCaps)> {
+        self.with_state(|s| s.authenticate(tenant_name, user_name, password))
+    }
+
+    fn create_session(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+        requested_caps: TenantCaps,
+        ttl_secs: Option<u64>,
+    ) -> CelResult<(SessionToken, Session)> {
+        self.with_state(|s| s.create_session(tenant, user, requested_caps, ttl_secs))
+    }
+
+    fn validate_token(&self, token: &SessionToken) -> CelResult<Session> {
+        self.with_state(|s| s.validate_token(token))
+    }
+
+    fn revoke_token(&self, token: &SessionToken) -> CelResult<()> {
+        self.with_state(|s| s.revoke_token(token))
+    }
+
+    fn purge_expired_sessions(&self) -> CelResult<usize> {
+        self.with_state(|s| Ok(s.purge_expired_sessions()))
     }
 }
 
@@ -977,5 +1304,196 @@ mod tests {
         let p2 = s2.get_by_name("p").unwrap();
         assert_eq!(p2.usage.vcpus, 1);
         assert_eq!(s2.children(p2.id).unwrap().len(), 1);
+    }
+
+    // -----------------------------------------------------------
+    // W32 — authentication & sessions
+    // -----------------------------------------------------------
+
+    /// Standard fixture: tenant "acme" with user "alice" having
+    /// VM read+write caps.
+    fn auth_fixture() -> (MemTenantStore, TenantId, UserId) {
+        let s = MemTenantStore::new();
+        let t = s
+            .create(TenantSpec::new("acme", quotas()).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let u = s
+            .add_user(
+                t.id,
+                "alice".into(),
+                TenantCaps::VM_LIFECYCLE_READ | TenantCaps::VM_LIFECYCLE_WRITE,
+            )
+            .unwrap();
+        (s, t.id, u.id)
+    }
+
+    #[test]
+    fn set_password_then_authenticate_succeeds() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "correct horse battery").unwrap();
+        let (got_tid, got_uid, caps) =
+            s.authenticate("acme", "alice", "correct horse battery").unwrap();
+        assert_eq!(got_tid, tid);
+        assert_eq!(got_uid, uid);
+        assert!(caps.contains(TenantCaps::VM_LIFECYCLE_READ));
+    }
+
+    fn assert_uniform_credentials_denied(err: CelError) {
+        match err {
+            CelError::CapabilityDenied("auth.credentials") => {}
+            other => panic!("expected auth.credentials denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticate_wrong_password_yields_uniform_error() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "correct horse battery").unwrap();
+        let err = s.authenticate("acme", "alice", "WRONG").unwrap_err();
+        assert_uniform_credentials_denied(err);
+    }
+
+    #[test]
+    fn authenticate_unknown_user_yields_uniform_error() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "pw").unwrap();
+        let err = s.authenticate("acme", "ghost", "pw").unwrap_err();
+        assert_uniform_credentials_denied(err);
+    }
+
+    #[test]
+    fn authenticate_unknown_tenant_yields_uniform_error() {
+        let (s, _tid, _uid) = auth_fixture();
+        let err = s.authenticate("nope", "alice", "pw").unwrap_err();
+        assert_uniform_credentials_denied(err);
+    }
+
+    #[test]
+    fn authenticate_no_password_set_yields_uniform_error() {
+        let (s, _tid, _uid) = auth_fixture();
+        // alice has no password_hash at all.
+        let err = s.authenticate("acme", "alice", "pw").unwrap_err();
+        assert_uniform_credentials_denied(err);
+    }
+
+    #[test]
+    fn create_session_attenuates_caps_through_user() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "pw").unwrap();
+        // alice only has VM caps; ask for ALL — must come back
+        // attenuated to her actual caps.
+        let (token, session) = s
+            .create_session(tid, uid, TenantCaps::ALL, Some(60))
+            .unwrap();
+        assert_eq!(session.tenant, tid);
+        assert_eq!(session.user, uid);
+        assert!(session.caps.contains(TenantCaps::VM_LIFECYCLE_READ));
+        assert!(!session.caps.contains(TenantCaps::VOLUME_WRITE));
+        // token is 64 hex chars.
+        assert_eq!(token.as_str().len(), 64);
+    }
+
+    #[test]
+    fn validate_token_round_trip() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "pw").unwrap();
+        let (token, _) = s
+            .create_session(tid, uid, TenantCaps::ALL, Some(60))
+            .unwrap();
+        let got = s.validate_token(&token).unwrap();
+        assert_eq!(got.tenant, tid);
+        assert_eq!(got.user, uid);
+        assert_eq!(got.user_name, "alice");
+    }
+
+    #[test]
+    fn validate_token_rejects_expired() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "pw").unwrap();
+        // ttl = 0 ⇒ expires_ms == created_ms ⇒ is_expired_at(now)
+        // is true on the very next call.
+        let (token, _) = s
+            .create_session(tid, uid, TenantCaps::ALL, Some(0))
+            .unwrap();
+        let err = s.validate_token(&token).unwrap_err();
+        match err {
+            CelError::CapabilityDenied("auth.session") => {}
+            other => panic!("expected auth.session denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revoke_token_is_idempotent() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "pw").unwrap();
+        let (token, _) = s
+            .create_session(tid, uid, TenantCaps::ALL, Some(60))
+            .unwrap();
+        s.revoke_token(&token).unwrap();
+        // Second revoke returns Ok(()).
+        s.revoke_token(&token).unwrap();
+        // And the token is no longer usable.
+        let err = s.validate_token(&token).unwrap_err();
+        assert!(matches!(err, CelError::CapabilityDenied("auth.session")));
+    }
+
+    #[test]
+    fn purge_expired_sessions_counts() {
+        let (s, tid, uid) = auth_fixture();
+        s.set_password(tid, uid, "pw").unwrap();
+        let _ = s
+            .create_session(tid, uid, TenantCaps::ALL, Some(0))
+            .unwrap();
+        let _ = s
+            .create_session(tid, uid, TenantCaps::ALL, Some(60))
+            .unwrap();
+        let purged = s.purge_expired_sessions().unwrap();
+        assert_eq!(purged, 1);
+    }
+
+    #[test]
+    fn file_store_persists_sessions_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tenants.json");
+        let token_str = {
+            let s = FileTenantStore::open(&path).unwrap();
+            let t = s
+                .create(TenantSpec::new("acme", quotas()).unwrap(), TenantCaps::ALL)
+                .unwrap();
+            let u = s
+                .add_user(t.id, "alice".into(), TenantCaps::VM_LIFECYCLE_READ)
+                .unwrap();
+            s.set_password(t.id, u.id, "pw").unwrap();
+            let (token, _) = s
+                .create_session(t.id, u.id, TenantCaps::ALL, Some(3600))
+                .unwrap();
+            token.as_str().to_string()
+        };
+        // Reopen the store and check the token still validates.
+        let s2 = FileTenantStore::open(&path).unwrap();
+        let token = SessionToken::from_hex(&token_str).unwrap();
+        let session = s2.validate_token(&token).unwrap();
+        assert_eq!(session.user_name, "alice");
+    }
+
+    #[test]
+    fn password_hash_never_persisted_as_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tenants.json");
+        let s = FileTenantStore::open(&path).unwrap();
+        let t = s
+            .create(TenantSpec::new("acme", quotas()).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let u = s
+            .add_user(t.id, "alice".into(), TenantCaps::VM_LIFECYCLE_READ)
+            .unwrap();
+        let secret = "supersecret-marker-XYZ";
+        s.set_password(t.id, u.id, secret).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains(secret),
+            "plaintext password leaked into tenants.json"
+        );
     }
 }
