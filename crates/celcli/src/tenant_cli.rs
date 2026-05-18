@@ -39,13 +39,7 @@ pub enum TenantCmd {
         name: String,
     },
     /// Delete a tenant by name.
-    Delete {
-        #[command(flatten)]
-        store: StoreArgs,
-        /// Tenant name.
-        #[arg(long)]
-        name: String,
-    },
+    Delete(TenantDeleteArgs),
     /// User management for a tenant.
     User {
         #[command(subcommand)]
@@ -82,6 +76,14 @@ pub enum TenantCmd {
     Logout(LogoutArgs),
     /// Print the identity of the active session token (W32).
     Whoami(WhoamiArgs),
+    /// Rotate a tenant's root capabilities (W33). Narrows every
+    /// user's caps to `new ∩ user.caps` and revokes every live
+    /// session for the tenant.
+    RotateCaps(RotateCapsArgs),
+    /// Revoke live sessions in bulk (W33). Revokes every session
+    /// for `--tenant`; if `--user` is also given, narrows to that
+    /// user only. Idempotent.
+    RevokeSessions(RevokeSessionsArgs),
 }
 
 /// `celctl tenant subtenant <op>` dispatch enum.
@@ -396,6 +398,68 @@ pub struct WhoamiArgs {
     pub json: bool,
 }
 
+/// Arguments for `tenant delete` (W33-extended).
+#[derive(Debug, Args, Clone)]
+pub struct TenantDeleteArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Tenant name.
+    #[arg(long)]
+    pub name: String,
+    /// Recursively delete every descendant (W33). Without this
+    /// flag the deletion refuses if the tenant has subtenants.
+    #[arg(long, default_value_t = false)]
+    pub recursive: bool,
+    /// Confirm destructive operations without an interactive
+    /// prompt. Required for `--recursive`; harmless otherwise.
+    #[arg(long, default_value_t = false)]
+    pub r#yes: bool,
+    /// Emit a machine-readable report (JSON) instead of a
+    /// one-line summary.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+/// Arguments for `tenant rotate-caps` (W33).
+#[derive(Debug, Args, Clone)]
+pub struct RotateCapsArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Tenant name.
+    #[arg(long)]
+    pub tenant: String,
+    /// New root capability tags (comma-separated). Must be ⊆
+    /// parent's `root_caps` if the tenant is a subtenant.
+    #[arg(long)]
+    pub caps: String,
+    /// Confirm the rotation without an interactive prompt.
+    /// Rotations revoke every live session for the tenant and
+    /// narrow user caps, so we require explicit confirmation.
+    #[arg(long, default_value_t = false)]
+    pub r#yes: bool,
+    /// Emit a JSON report instead of a one-line summary.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+/// Arguments for `tenant revoke-sessions` (W33).
+#[derive(Debug, Args, Clone)]
+pub struct RevokeSessionsArgs {
+    #[command(flatten)]
+    pub store: StoreArgs,
+    /// Tenant name.
+    #[arg(long)]
+    pub tenant: String,
+    /// Optional user name; when set, only that user's sessions
+    /// are revoked. When unset, every session in the tenant is
+    /// revoked.
+    #[arg(long)]
+    pub user: Option<String>,
+    /// Emit JSON instead of a one-line summary.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
 /// On-disk session file format. Mirrors [`celtenancy::Session`]
 /// minus the SHA-256 hash (the plaintext token is what the
 /// holder actually needs).
@@ -509,13 +573,7 @@ pub fn run(cmd: TenantCmd) -> CelResult<()> {
             }
             Ok(())
         }
-        TenantCmd::Delete { store, name } => {
-            let s = open(&store)?;
-            let t = s.get_by_name(&name)?;
-            s.delete(t.id)?;
-            println!("deleted {} ({})", t.name, t.id);
-            Ok(())
-        }
+        TenantCmd::Delete(a) => run_delete(a),
         TenantCmd::User { op } => run_user(op),
         TenantCmd::Quota { op } => run_quota(op),
         TenantCmd::Exec { op } => run_exec(op),
@@ -525,6 +583,8 @@ pub fn run(cmd: TenantCmd) -> CelResult<()> {
         TenantCmd::Login(a) => run_login(a),
         TenantCmd::Logout(a) => run_logout(a),
         TenantCmd::Whoami(a) => run_whoami(a),
+        TenantCmd::RotateCaps(a) => run_rotate_caps(a),
+        TenantCmd::RevokeSessions(a) => run_revoke_sessions(a),
     }
 }
 
@@ -982,6 +1042,109 @@ fn run_whoami(a: WhoamiArgs) -> CelResult<()> {
             session.caps.to_tags(),
             session.expires_ms,
         );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// W33 \u2014 cap rotation, recursive delete, bulk revocation
+// ---------------------------------------------------------------------------
+
+fn run_delete(a: TenantDeleteArgs) -> CelResult<()> {
+    let s = open(&a.store)?;
+    let t = s.get_by_name(&a.name)?;
+    if a.recursive {
+        if !a.r#yes {
+            return Err(CelError::Invalid(
+                "--recursive requires --yes (destructive)",
+            ));
+        }
+        let report = s.delete_tenant_recursive(t.id)?;
+        if a.json {
+            let json = serde_json::to_string_pretty(&report)
+                .map_err(|e| CelError::Storage(format!("delete json: {e}")))?;
+            println!("{json}");
+        } else {
+            println!(
+                "deleted {} tenant(s); revoked {} session(s); dropped {} user(s)",
+                report.deleted_tenants.len(),
+                report.revoked_sessions,
+                report.dropped_users,
+            );
+            for (id, name) in &report.deleted_tenants {
+                println!("  - {name} ({id})");
+            }
+        }
+        return Ok(());
+    }
+    s.delete(t.id)?;
+    println!("deleted {} ({})", t.name, t.id);
+    Ok(())
+}
+
+fn run_rotate_caps(a: RotateCapsArgs) -> CelResult<()> {
+    if !a.r#yes {
+        return Err(CelError::Invalid(
+            "--yes required: rotate-caps revokes every live session",
+        ));
+    }
+    let s = open(&a.store)?;
+    let t = s.get_by_name(&a.tenant)?;
+    let new = TenantCaps::parse_tags(&a.caps)?;
+    let report = s.rotate_root_caps(t.id, new)?;
+    if a.json {
+        let json = serde_json::to_string_pretty(&report)
+            .map_err(|e| CelError::Storage(format!("rotate json: {e}")))?;
+        println!("{json}");
+    } else {
+        println!(
+            "rotated tenant={} old={} new={} narrowed_users={} revoked_sessions={}",
+            report.tenant_name,
+            report.old_caps.to_tags(),
+            report.new_caps.to_tags(),
+            report.attenuated_users,
+            report.revoked_sessions,
+        );
+    }
+    Ok(())
+}
+
+fn run_revoke_sessions(a: RevokeSessionsArgs) -> CelResult<()> {
+    let s = open(&a.store)?;
+    let t = s.get_by_name(&a.tenant)?;
+    let revoked = match a.user {
+        Some(ref uname) => {
+            let uid = t
+                .users
+                .iter()
+                .find(|u| u.name == *uname)
+                .map(|u| u.id)
+                .ok_or(CelError::Invalid("user name unknown"))?;
+            s.revoke_user_sessions(t.id, uid)?
+        }
+        None => s.revoke_tenant_sessions(t.id)?,
+    };
+    if a.json {
+        let v = serde_json::json!({
+            "tenant": t.name,
+            "user": a.user,
+            "revoked": revoked,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&v).unwrap_or_default()
+        );
+    } else {
+        match a.user {
+            Some(u) => println!(
+                "revoked {revoked} session(s) for user={u} tenant={}",
+                t.name
+            ),
+            None => println!(
+                "revoked {revoked} session(s) for tenant={}",
+                t.name
+            ),
+        }
     }
     Ok(())
 }

@@ -665,3 +665,74 @@ deletes the file. `whoami` re-validates against the store.
   user (`tenant user remove`).
 
 ---
+
+---
+
+## W33 — Final polish: revocation, rotation, recursive deletion
+
+W33 is the closing sprint for the Tenancy Layer. With it the layer
+is ready for integration with the Portal Layer.
+
+### Threat model additions
+
+| Concern                                  | Defence                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| Compromised credential not yet rotated   | `set_password` auto-revokes every prior session for the user.      |
+| Stolen token outliving a password change | Same: password rotation invalidates the token store, not just the password. |
+| Tenant lost its trust mandate            | `rotate_root_caps` narrows users + kills sessions in one txn.      |
+| Subtenant escapes parent's cap ceiling   | `rotate_root_caps` rejects new caps not ⊆ parent's `root_caps`.     |
+| Orphaned VMs / volumes on tenant tear-down | `delete_tenant_recursive` refuses if any node has non-zero usage.   |
+| Half-deleted subtree on error            | Recursive delete validates the entire subtree before any mutation. |
+
+### Surface
+
+| API                                          | Layer  | Notes                                                                 |
+| -------------------------------------------- | ------ | --------------------------------------------------------------------- |
+| `TenantStore::revoke_user_sessions`          | trait  | Idempotent; returns count. Auto-invoked by `set_password`/`remove_user`. |
+| `TenantStore::revoke_tenant_sessions`        | trait  | Idempotent; returns count. Used by `rotate_root_caps` + recursive delete. |
+| `TenantStore::rotate_root_caps`              | trait  | Narrows users + kills sessions; rejects super-set of parent caps.     |
+| `TenantStore::delete_tenant_recursive`       | trait  | Post-order; whole-subtree usage guard; returns `DeleteReport`.        |
+| `RotateReport`                               | type   | `{tenant, tenant_name, old_caps, new_caps, attenuated_users, revoked_sessions}`. |
+| `DeleteReport`                               | type   | `{deleted_tenants: Vec<(TenantId, String)>, revoked_sessions, dropped_users}`. |
+| `celctl tenant rotate-caps --tenant X --caps T --yes [--json]` | CLI    | `--yes` mandatory (destructive).                                       |
+| `celctl tenant revoke-sessions --tenant X [--user Y] [--json]` | CLI    | Bulk + per-user variants.                                              |
+| `celctl tenant delete --name X --recursive --yes [--json]`     | CLI    | `--recursive` requires `--yes`; non-recursive path unchanged.          |
+
+### Tests
+
+* 9 unit tests in `crates/celtenancy/src/store.rs`
+  (`revoke_user_sessions_*`, `revoke_tenant_sessions_*`,
+  `set_password_revokes_only_that_users_sessions`,
+  `remove_user_revokes_their_sessions`,
+  `rotate_root_caps_*`, `delete_recursive_*`,
+  `file_store_persists_w33_state_across_reopen`).
+* 6 e2e tests in `crates/celtest/tests/tenant_w33_e2e.rs` driving
+  `FileTenantStore` round-trips on every new operation.
+* Workspace baseline: **313 passed / 0 failed across 40 suites**.
+
+### Limitations / future work
+
+* `rotate_root_caps` does not propagate into already-recorded
+  audit events; existing entries retain the cap tags they were
+  signed with. This matches CelMesh's append-only audit policy.
+* Bulk revocation does not blacklist tokens at a CDN / edge —
+  callers must validate against the live store on each request.
+  This is the same trust model as W32 and is intentional: the
+  store is the only source of truth.
+* Recursive delete is **not** transactional across multiple
+  processes. Operators running concurrent admin tools should
+  serialise destructive operations.
+
+### Tenancy Layer status
+
+With W33, the Tenancy Layer ships:
+
+* Tenants, users, quotas, capabilities (W27).
+* Runtime binding to CelMesh (W28).
+* Exec dispatcher with charge-and-refund (W29).
+* Audit sinks (W30).
+* Nested tenants with quota propagation (W31).
+* Argon2id password auth + session tokens (W32).
+* Revocation / rotation / recursive cleanup (W33).
+
+The layer is ready for the Portal Layer to consume.

@@ -51,6 +51,6 @@ pub use caps::{attenuate, TenantCaps};
 pub use namespace::TenantNamespace;
 pub use quota::{charge_quota, release_quota, QuotaCharge, QuotaUsage, TenantQuotas};
 pub use runtime::TenantVmHost;
-pub use store::{FileTenantStore, MemTenantStore, TenantStore};
+pub use store::{DeleteReport, FileTenantStore, MemTenantStore, RotateReport, TenantStore};
 pub use tenant::{Tenant, TenantId, TenantSpec};
 pub use user::{User, UserId};

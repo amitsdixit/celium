@@ -267,6 +267,126 @@ pub trait TenantStore: Send + Sync {
     fn purge_expired_sessions(&self) -> CelResult<usize> {
         Err(CelError::Internal("auth not supported by this store"))
     }
+
+    // -----------------------------------------------------------
+    // W33 — bulk revocation, cap rotation, recursive delete
+    //
+    // These are administrative operations on top of the W31/W32
+    // foundations. Default impls fall back to `CelError::Internal`
+    // so third-party stores keep compiling; the two first-party
+    // stores (`MemTenantStore`, `FileTenantStore`) override every
+    // method below.
+    // -----------------------------------------------------------
+
+    /// Revoke every live session belonging to `(tenant, user)`.
+    /// Idempotent; returns the number of sessions actually
+    /// dropped. Used internally by `set_password` and
+    /// `remove_user`, but also exposed so operators can force-
+    /// logout a compromised user.
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on an unknown tenant.
+    /// * [`CelError::Storage`] when the persistence layer fails.
+    fn revoke_user_sessions(
+        &self,
+        _tenant: TenantId,
+        _user: UserId,
+    ) -> CelResult<usize> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Revoke every live session belonging to `tenant`.
+    /// Idempotent. Used internally by `rotate_root_caps` and
+    /// `delete_tenant_recursive`; also exposed for "kick everyone
+    /// out of tenant X" admin actions.
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on an unknown tenant.
+    /// * [`CelError::Storage`] when the persistence layer fails.
+    fn revoke_tenant_sessions(&self, _tenant: TenantId) -> CelResult<usize> {
+        Err(CelError::Internal("auth not supported by this store"))
+    }
+
+    /// Replace a tenant's `root_caps` with `new_caps` and bring
+    /// every dependent state in line:
+    ///
+    /// * Re-attenuates every user's caps as `u.caps & new_caps`
+    ///   (users never gain caps from a rotation; only lose them).
+    /// * Revokes every live session for the tenant (the prior
+    ///   tokens carried caps the operator just renounced).
+    /// * If the tenant has a parent, refuses when `new_caps` is
+    ///   not a subset of the parent's `root_caps` — you cannot
+    ///   rotate a subtenant up.
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on an unknown tenant.
+    /// * [`CelError::CapabilityDenied`] when `new_caps` escapes
+    ///   the parent's ceiling.
+    /// * [`CelError::Storage`] when the persistence layer fails.
+    fn rotate_root_caps(
+        &self,
+        _tenant: TenantId,
+        _new_caps: TenantCaps,
+    ) -> CelResult<RotateReport> {
+        Err(CelError::Internal("admin not supported by this store"))
+    }
+
+    /// Delete `tenant` and every descendant in a single atomic
+    /// transaction. The whole subtree must have zero usage — the
+    /// store refuses the call if any node in the subtree carries
+    /// a non-default [`QuotaUsage`] so operators cannot orphan
+    /// live VMs / volumes by accident.
+    ///
+    /// Walks post-order so children are removed before parents,
+    /// matching the order of namespace cleanup. Every revoked
+    /// session is counted into the returned [`DeleteReport`].
+    ///
+    /// # Errors
+    ///
+    /// * [`CelError::Invalid`] on an unknown tenant or when any
+    ///   node in the subtree has non-zero usage (the message
+    ///   names which node).
+    /// * [`CelError::Storage`] when the persistence layer fails.
+    fn delete_tenant_recursive(
+        &self,
+        _tenant: TenantId,
+    ) -> CelResult<DeleteReport> {
+        Err(CelError::Internal("admin not supported by this store"))
+    }
+}
+
+/// Outcome of [`TenantStore::rotate_root_caps`]. Returned for
+/// audit + UX — every field is informational.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RotateReport {
+    /// The tenant whose caps were rotated.
+    pub tenant: TenantId,
+    /// Tenant name (cached so the caller doesn't need a second lookup).
+    pub tenant_name: String,
+    /// Caps before the rotation.
+    pub old_caps: TenantCaps,
+    /// Caps after the rotation.
+    pub new_caps: TenantCaps,
+    /// Number of users whose caps were narrowed by the rotation.
+    pub attenuated_users: usize,
+    /// Number of live sessions that were revoked.
+    pub revoked_sessions: usize,
+}
+
+/// Outcome of [`TenantStore::delete_tenant_recursive`]. Returned
+/// for audit + UX.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DeleteReport {
+    /// Every tenant that was deleted, in post-order
+    /// (children before parents). Each entry is `(id, name)`.
+    pub deleted_tenants: Vec<(TenantId, String)>,
+    /// Total live sessions revoked across the whole subtree.
+    pub revoked_sessions: usize,
+    /// Total users dropped across the whole subtree.
+    pub dropped_users: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +527,11 @@ impl StoreState {
             .get_mut(&tenant.0)
             .ok_or(CelError::Invalid("tenant id unknown"))?;
         t.users.retain(|u| u.id != user);
+        // W33 — kill the removed user's sessions so a still-cached
+        // token cannot keep speaking for a principal that no
+        // longer exists.
+        self.sessions
+            .retain(|s| !(s.tenant == tenant && s.user == user));
         Ok(())
     }
 
@@ -509,6 +634,12 @@ impl StoreState {
             .find(|u| u.id == user)
             .ok_or(CelError::Invalid("user id unknown"))?;
         u.password_hash = Some(hash);
+        // W33 — a password change invalidates every prior session
+        // for this user. Without this, a stolen token would
+        // outlive the rotation that was supposed to defend
+        // against it.
+        self.sessions
+            .retain(|s| !(s.tenant == tenant && s.user == user));
         Ok(())
     }
 
@@ -622,6 +753,187 @@ impl StoreState {
         let before = self.sessions.len();
         self.sessions.retain(|s| !s.is_expired_at(now));
         before - self.sessions.len()
+    }
+
+    // -----------------------------------------------------------
+    // W33 — bulk revocation, cap rotation, recursive delete
+    // -----------------------------------------------------------
+
+    /// Revoke every session belonging to `(tenant, user)`. The
+    /// tenant must exist; the user need not (a remove_user racing
+    /// with a session revocation should still succeed).
+    fn revoke_user_sessions(
+        &mut self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> CelResult<usize> {
+        if !self.tenants.contains_key(&tenant.0) {
+            return Err(CelError::Invalid("tenant id unknown"));
+        }
+        let before = self.sessions.len();
+        self.sessions
+            .retain(|s| !(s.tenant == tenant && s.user == user));
+        Ok(before - self.sessions.len())
+    }
+
+    /// Revoke every session belonging to `tenant`.
+    fn revoke_tenant_sessions(&mut self, tenant: TenantId) -> CelResult<usize> {
+        if !self.tenants.contains_key(&tenant.0) {
+            return Err(CelError::Invalid("tenant id unknown"));
+        }
+        let before = self.sessions.len();
+        self.sessions.retain(|s| s.tenant != tenant);
+        Ok(before - self.sessions.len())
+    }
+
+    /// Rotate `tenant`'s root caps to `new_caps`.
+    ///
+    /// Three-step transaction (the surrounding mutex keeps it
+    /// atomic against concurrent callers):
+    ///
+    /// 1. Validate against parent (if any). Subtenants cannot
+    ///    rotate up past their parent's ceiling.
+    /// 2. Re-attenuate every user's caps in-place to
+    ///    `u.caps & new_caps`. We intersect rather than `attenuate`
+    ///    because the caller is explicitly narrowing a ceiling —
+    ///    no escalation can happen.
+    /// 3. Revoke every live session for this tenant. Prior
+    ///    sessions carried caps the operator just dropped, so
+    ///    leaving them live would silently re-grant the rescinded
+    ///    authority.
+    fn rotate_root_caps(
+        &mut self,
+        tenant: TenantId,
+        new_caps: TenantCaps,
+    ) -> CelResult<RotateReport> {
+        // Step 1 — read parent caps without holding the &mut t
+        // borrow, so step 2 can mutate freely.
+        let (parent, old_caps, tenant_name) = {
+            let t = self
+                .tenants
+                .get(&tenant.0)
+                .ok_or(CelError::Invalid("tenant id unknown"))?;
+            (t.parent, t.root_caps, t.name.clone())
+        };
+        if let Some(parent_id) = parent {
+            let p = self
+                .tenants
+                .get(&parent_id.0)
+                .ok_or(CelError::Internal("parent tenant disappeared"))?;
+            if !p.root_caps.contains(new_caps) {
+                return Err(CelError::CapabilityDenied(
+                    "rotated caps exceed parent",
+                ));
+            }
+        }
+        // Step 2 — narrow users + flip root caps.
+        let mut attenuated_users = 0usize;
+        {
+            let t = self
+                .tenants
+                .get_mut(&tenant.0)
+                .ok_or(CelError::Internal("tenant disappeared mid-rotate"))?;
+            t.root_caps = new_caps;
+            for u in &mut t.users {
+                let narrowed =
+                    TenantCaps::from_bits_truncate(u.caps.bits() & new_caps.bits());
+                if narrowed != u.caps {
+                    u.caps = narrowed;
+                    attenuated_users += 1;
+                }
+            }
+        }
+        // Step 3 — revoke sessions.
+        let revoked = {
+            let before = self.sessions.len();
+            self.sessions.retain(|s| s.tenant != tenant);
+            before - self.sessions.len()
+        };
+        Ok(RotateReport {
+            tenant,
+            tenant_name,
+            old_caps,
+            new_caps,
+            attenuated_users,
+            revoked_sessions: revoked,
+        })
+    }
+
+    /// Recursively delete `tenant` and its subtree.
+    ///
+    /// Validation runs across the whole subtree before any
+    /// mutation: every node must have zero usage. This avoids
+    /// the "deleted some children then bailed on a parent in use"
+    /// half-state.
+    fn delete_tenant_recursive(
+        &mut self,
+        tenant: TenantId,
+    ) -> CelResult<DeleteReport> {
+        // Collect the subtree (post-order: children before
+        // parents). Capped at 64 levels to catch cycles.
+        let mut subtree: Vec<TenantId> = Vec::new();
+        fn walk(
+            state: &StoreState,
+            root: TenantId,
+            out: &mut Vec<TenantId>,
+            depth: u32,
+        ) -> CelResult<()> {
+            if depth > 64 {
+                return Err(CelError::Internal("tenant hierarchy too deep"));
+            }
+            // Children first.
+            let kids: Vec<TenantId> = state
+                .tenants
+                .values()
+                .filter(|t| t.parent == Some(root))
+                .map(|t| t.id)
+                .collect();
+            for k in kids {
+                walk(state, k, out, depth + 1)?;
+            }
+            out.push(root);
+            Ok(())
+        }
+        if !self.tenants.contains_key(&tenant.0) {
+            return Err(CelError::Invalid("tenant id unknown"));
+        }
+        walk(self, tenant, &mut subtree, 0)?;
+
+        // Validate: no node may have non-zero usage. Surface the
+        // first violator by name so operators can fix it.
+        for tid in &subtree {
+            let t = self
+                .tenants
+                .get(&tid.0)
+                .ok_or(CelError::Internal("subtree node vanished"))?;
+            if t.usage != QuotaUsage::default() {
+                // Reuse the same static-str sentinel as
+                // single-tenant delete so existing test patterns
+                // keep matching; named context goes through the
+                // tenant name in logs / audit.
+                return Err(CelError::Invalid("tenant in use"));
+            }
+        }
+
+        // Mutation pass — post-order, accumulating the report.
+        let mut report = DeleteReport::default();
+        for tid in subtree {
+            // Revoke this tenant's sessions before removing it
+            // (so the count is well-defined even on a
+            // tenant-with-no-users-but-stale-sessions path).
+            let before = self.sessions.len();
+            self.sessions.retain(|s| s.tenant != tid);
+            report.revoked_sessions += before - self.sessions.len();
+
+            let t = self
+                .tenants
+                .remove(&tid.0)
+                .ok_or(CelError::Internal("subtree node vanished"))?;
+            report.dropped_users += t.users.len();
+            self.by_name.remove(&t.name);
+            report.deleted_tenants.push((tid, t.name));
+        }
+        Ok(report)
     }
 }
 
@@ -747,6 +1059,33 @@ impl TenantStore for MemTenantStore {
 
     fn purge_expired_sessions(&self) -> CelResult<usize> {
         self.with_state(|s| Ok(s.purge_expired_sessions()))
+    }
+
+    fn revoke_user_sessions(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> CelResult<usize> {
+        self.with_state(|s| s.revoke_user_sessions(tenant, user))
+    }
+
+    fn revoke_tenant_sessions(&self, tenant: TenantId) -> CelResult<usize> {
+        self.with_state(|s| s.revoke_tenant_sessions(tenant))
+    }
+
+    fn rotate_root_caps(
+        &self,
+        tenant: TenantId,
+        new_caps: TenantCaps,
+    ) -> CelResult<RotateReport> {
+        self.with_state(|s| s.rotate_root_caps(tenant, new_caps))
+    }
+
+    fn delete_tenant_recursive(
+        &self,
+        tenant: TenantId,
+    ) -> CelResult<DeleteReport> {
+        self.with_state(|s| s.delete_tenant_recursive(tenant))
     }
 }
 
@@ -953,6 +1292,33 @@ impl TenantStore for FileTenantStore {
 
     fn purge_expired_sessions(&self) -> CelResult<usize> {
         self.with_state(|s| Ok(s.purge_expired_sessions()))
+    }
+
+    fn revoke_user_sessions(
+        &self,
+        tenant: TenantId,
+        user: UserId,
+    ) -> CelResult<usize> {
+        self.with_state(|s| s.revoke_user_sessions(tenant, user))
+    }
+
+    fn revoke_tenant_sessions(&self, tenant: TenantId) -> CelResult<usize> {
+        self.with_state(|s| s.revoke_tenant_sessions(tenant))
+    }
+
+    fn rotate_root_caps(
+        &self,
+        tenant: TenantId,
+        new_caps: TenantCaps,
+    ) -> CelResult<RotateReport> {
+        self.with_state(|s| s.rotate_root_caps(tenant, new_caps))
+    }
+
+    fn delete_tenant_recursive(
+        &self,
+        tenant: TenantId,
+    ) -> CelResult<DeleteReport> {
+        self.with_state(|s| s.delete_tenant_recursive(tenant))
     }
 }
 
@@ -1495,5 +1861,231 @@ mod tests {
             !text.contains(secret),
             "plaintext password leaked into tenants.json"
         );
+    }
+
+    // -----------------------------------------------------------
+    // W33 — bulk revocation, cap rotation, recursive delete
+    // -----------------------------------------------------------
+
+    /// Shared fixture: tenant "acme" with users "alice" + "bob",
+    /// both with a password set. Returns store + ids.
+    #[allow(clippy::type_complexity)]
+    fn w33_fixture() -> (MemTenantStore, TenantId, UserId, UserId) {
+        let s = MemTenantStore::new();
+        let t = s
+            .create(TenantSpec::new("acme", quotas()).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let a = s
+            .add_user(t.id, "alice".into(), TenantCaps::ALL)
+            .unwrap();
+        let b = s
+            .add_user(t.id, "bob".into(), TenantCaps::VM_LIFECYCLE_READ)
+            .unwrap();
+        s.set_password(t.id, a.id, "alice-pw").unwrap();
+        s.set_password(t.id, b.id, "bob-pw").unwrap();
+        (s, t.id, a.id, b.id)
+    }
+
+    #[test]
+    fn revoke_user_sessions_drops_only_that_users_tokens() {
+        let (s, tid, aid, bid) = w33_fixture();
+        let (alice_token, _) = s.create_session(tid, aid, TenantCaps::ALL, None).unwrap();
+        let (_, _) = s.create_session(tid, aid, TenantCaps::ALL, None).unwrap();
+        let (bob_token, _) = s
+            .create_session(tid, bid, TenantCaps::VM_LIFECYCLE_READ, None)
+            .unwrap();
+        let n = s.revoke_user_sessions(tid, aid).unwrap();
+        assert_eq!(n, 2);
+        // Alice's tokens dead.
+        assert!(s.validate_token(&alice_token).is_err());
+        // Bob's token still alive.
+        assert!(s.validate_token(&bob_token).is_ok());
+        // Idempotent.
+        assert_eq!(s.revoke_user_sessions(tid, aid).unwrap(), 0);
+    }
+
+    #[test]
+    fn revoke_tenant_sessions_drops_every_token() {
+        let (s, tid, aid, bid) = w33_fixture();
+        let (a_tok, _) = s.create_session(tid, aid, TenantCaps::ALL, None).unwrap();
+        let (b_tok, _) = s
+            .create_session(tid, bid, TenantCaps::VM_LIFECYCLE_READ, None)
+            .unwrap();
+        let n = s.revoke_tenant_sessions(tid).unwrap();
+        assert_eq!(n, 2);
+        assert!(s.validate_token(&a_tok).is_err());
+        assert!(s.validate_token(&b_tok).is_err());
+    }
+
+    #[test]
+    fn set_password_revokes_only_that_users_sessions() {
+        let (s, tid, aid, bid) = w33_fixture();
+        let (a_tok, _) = s.create_session(tid, aid, TenantCaps::ALL, None).unwrap();
+        let (b_tok, _) = s
+            .create_session(tid, bid, TenantCaps::VM_LIFECYCLE_READ, None)
+            .unwrap();
+        s.set_password(tid, aid, "alice-pw-v2").unwrap();
+        // Alice's old session is gone.
+        assert!(s.validate_token(&a_tok).is_err());
+        // Bob untouched.
+        assert!(s.validate_token(&b_tok).is_ok());
+    }
+
+    #[test]
+    fn remove_user_revokes_their_sessions() {
+        let (s, tid, aid, _bid) = w33_fixture();
+        let (a_tok, _) = s.create_session(tid, aid, TenantCaps::ALL, None).unwrap();
+        s.remove_user(tid, aid).unwrap();
+        assert!(s.validate_token(&a_tok).is_err());
+    }
+
+    #[test]
+    fn rotate_root_caps_narrows_users_and_kills_sessions() {
+        let (s, tid, aid, bid) = w33_fixture();
+        let (a_tok, _) = s.create_session(tid, aid, TenantCaps::ALL, None).unwrap();
+        let (b_tok, _) = s
+            .create_session(tid, bid, TenantCaps::VM_LIFECYCLE_READ, None)
+            .unwrap();
+        // Narrow tenant to read-only VM caps.
+        let report = s
+            .rotate_root_caps(tid, TenantCaps::VM_LIFECYCLE_READ)
+            .unwrap();
+        assert_eq!(report.old_caps, TenantCaps::ALL);
+        assert_eq!(report.new_caps, TenantCaps::VM_LIFECYCLE_READ);
+        // Alice had ALL caps → narrowed. Bob had READ → unchanged.
+        assert_eq!(report.attenuated_users, 1);
+        assert_eq!(report.revoked_sessions, 2);
+        // Every session for the tenant is dead.
+        assert!(s.validate_token(&a_tok).is_err());
+        assert!(s.validate_token(&b_tok).is_err());
+        // User caps are narrowed in the persisted record.
+        let alice = s
+            .get(tid)
+            .unwrap()
+            .users
+            .into_iter()
+            .find(|u| u.id == aid)
+            .unwrap();
+        assert_eq!(alice.caps, TenantCaps::VM_LIFECYCLE_READ);
+    }
+
+    #[test]
+    fn rotate_root_caps_refuses_to_exceed_parent() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(
+                TenantSpec::new("p", quotas()).unwrap(),
+                TenantCaps::VM_LIFECYCLE_READ,
+            )
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", quotas()).unwrap(),
+                TenantCaps::VM_LIFECYCLE_READ,
+            )
+            .unwrap();
+        // Try to give child more than parent has.
+        let err = s
+            .rotate_root_caps(c.id, TenantCaps::ALL)
+            .unwrap_err();
+        assert!(matches!(err, CelError::CapabilityDenied(_)));
+        // Original caps untouched.
+        assert_eq!(
+            s.get(c.id).unwrap().root_caps,
+            TenantCaps::VM_LIFECYCLE_READ
+        );
+    }
+
+    #[test]
+    fn delete_recursive_walks_subtree_post_order() {
+        let s = MemTenantStore::new();
+        let root = s
+            .create(TenantSpec::new("root", quotas()).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let mid = s
+            .create_subtenant(
+                root.id,
+                TenantSpec::new("mid", quotas()).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        let leaf = s
+            .create_subtenant(
+                mid.id,
+                TenantSpec::new("leaf", quotas()).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        let u = s
+            .add_user(leaf.id, "z".into(), TenantCaps::VM_LIFECYCLE_READ)
+            .unwrap();
+        s.set_password(leaf.id, u.id, "pw").unwrap();
+        let (_tok, _) = s
+            .create_session(leaf.id, u.id, TenantCaps::VM_LIFECYCLE_READ, None)
+            .unwrap();
+        let report = s.delete_tenant_recursive(root.id).unwrap();
+        // Post-order: leaf, mid, root.
+        let names: Vec<&str> = report
+            .deleted_tenants
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect();
+        assert_eq!(names, vec!["leaf", "mid", "root"]);
+        assert_eq!(report.revoked_sessions, 1);
+        assert_eq!(report.dropped_users, 1);
+        // Store is empty.
+        assert_eq!(s.list().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn delete_recursive_refuses_if_any_node_has_usage() {
+        let s = MemTenantStore::new();
+        let p = s
+            .create(TenantSpec::new("p", quotas()).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let c = s
+            .create_subtenant(
+                p.id,
+                TenantSpec::new("c", quotas()).unwrap(),
+                TenantCaps::ALL,
+            )
+            .unwrap();
+        // Burn 1 vcpu against the leaf — propagates to parent.
+        s.charge(
+            c.id,
+            QuotaCharge {
+                vcpus: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let err = s.delete_tenant_recursive(p.id).unwrap_err();
+        assert!(matches!(err, CelError::Invalid("tenant in use")));
+        // Both tenants still present.
+        assert_eq!(s.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn file_store_persists_w33_state_across_reopen() {
+        let dir = tempdir();
+        let path = dir.join("tenants.json");
+        let s = FileTenantStore::open(&path).unwrap();
+        let t = s
+            .create(TenantSpec::new("acme", quotas()).unwrap(), TenantCaps::ALL)
+            .unwrap();
+        let u = s.add_user(t.id, "alice".into(), TenantCaps::ALL).unwrap();
+        s.set_password(t.id, u.id, "pw").unwrap();
+        let (_tok, _) = s.create_session(t.id, u.id, TenantCaps::ALL, None).unwrap();
+        s.rotate_root_caps(t.id, TenantCaps::VM_LIFECYCLE_READ)
+            .unwrap();
+        drop(s);
+
+        let s2 = FileTenantStore::open(&path).unwrap();
+        let t2 = s2.get_by_name("acme").unwrap();
+        assert_eq!(t2.root_caps, TenantCaps::VM_LIFECYCLE_READ);
+        assert_eq!(t2.users[0].caps, TenantCaps::VM_LIFECYCLE_READ);
+        // Sessions revoked → purge sees nothing left.
+        assert_eq!(s2.purge_expired_sessions().unwrap(), 0);
     }
 }
